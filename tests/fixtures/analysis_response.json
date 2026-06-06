@@ -1,0 +1,29 @@
+{
+  "overall_risk_score": 68,
+  "overall_risk_level": "medium",
+  "summary": "Target has significant breach exposure across 3 major incidents affecting email and password data. Broker presence is moderate with 4 sites holding personal data. Two AI platforms present unresolvable training risks.",
+  "top_findings": [
+    "Email found in 3 major breaches including LinkedIn (164M accounts) and Adobe (152M accounts)",
+    "Full profile including address and relatives found on Spokeo and Whitepages",
+    "Gemini and Grok have no opt-out for training — data permanently embedded",
+    "Email found in pastebin paste dated 2024 — recent exposure",
+    "PGP key publicly linked to email — identity correlation risk"
+  ],
+  "immediate_actions": [
+    "Opt out of Claude training at claude.ai/settings/privacy",
+    "Opt out of ChatGPT training at chat.openai.com/settings/data-controls",
+    "Submit opt-out to Spokeo at spokeo.com/optout — highest data depth",
+    "Submit opt-out to Whitepages — address and phone exposed",
+    "Change password for any accounts using credentials from Adobe or LinkedIn breach"
+  ],
+  "longer_term_actions": [
+    "Consider deleting Grok/X account if not essential — training cannot be disabled",
+    "Submit remaining broker opt-outs via EasyOptOuts dashboard",
+    "Investigate pastebin paste to understand what data was exposed",
+    "Consider email alias strategy to prevent future cross-broker correlation",
+    "Review whether PGP key should remain publicly linked to this identity"
+  ],
+  "breach_severity": "high",
+  "broker_exposure_severity": "medium",
+  "ai_exposure_severity": "high"
+}
