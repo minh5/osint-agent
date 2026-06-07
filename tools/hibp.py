@@ -31,7 +31,8 @@ def run(inp: HibpInput) -> ToolResult:
     headers = {"hibp-api-key": api_key, "user-agent": "osint-agent"}
 
     try:
-        resp = requests.get(url, headers=headers, timeout=10)
+        params = {"truncateResponse": "false"}
+        resp = requests.get(url, headers=headers, params=params, timeout=10)
 
         if resp.status_code == 404:
             output = HibpOutput(query_value=inp.value, breach_count=0, breaches=[], paste_count=0)
@@ -47,7 +48,7 @@ def run(inp: HibpInput) -> ToolResult:
         if resp.status_code == 429:
             retry_after = int(resp.headers.get("retry-after", 2))
             time.sleep(retry_after)
-            resp = requests.get(url, headers=headers, timeout=10)
+            resp = requests.get(url, headers=headers, params=params, timeout=10)
 
         resp.raise_for_status()
 

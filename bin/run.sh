@@ -113,7 +113,26 @@ if ! docker image inspect osint-agent &>/dev/null 2>&1; then
 fi
 echo -e "${GREEN}✓ osint-agent image ready${NC}"
 
-echo ""
+# ── GHunt nudge ───────────────────────────────────────────────────────────────
+COMPOSE_PROJECT=$(basename "$PROJECT_DIR" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')
+GHUNT_VOL="${COMPOSE_PROJECT}_ghunt_creds"
+GHUNT_CREDS=$(docker volume inspect "$GHUNT_VOL" &>/dev/null 2>&1 && \
+  docker run --rm -v "${GHUNT_VOL}:/creds" alpine test -f /creds/creds.m 2>/dev/null && echo "yes" || echo "no") 2>/dev/null || GHUNT_CREDS="no"
+LOCAL_GHUNT="$HOME/.malfrats/ghunt/creds.m"
+
+if [[ ! -f "$LOCAL_GHUNT" && "$GHUNT_CREDS" != "yes" ]]; then
+  echo -e "${RED}✗ GHunt not authenticated — scan blocked.${NC}"
+  echo ""
+  echo "  GHunt finds Google account intel (Maps reviews, YouTube, linked"
+  echo "  services) and requires a one-time setup using your browser."
+  echo ""
+  echo "  Run this now, then re-run your scan:"
+  echo ""
+  echo -e "    ${BOLD}./bin/ghunt-login.sh${NC}"
+  echo ""
+  exit 1
+fi
+
 echo -e "${GREEN}✓ All services ready${NC}"
 echo ""
 

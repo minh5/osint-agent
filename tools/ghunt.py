@@ -48,10 +48,17 @@ def run(inp: GHuntInput) -> ToolResult:
 
         raw: dict = {}
         if Path(out_path).exists():
-            raw = json.loads(Path(out_path).read_text())
+            content = Path(out_path).read_text().strip()
             Path(out_path).unlink(missing_ok=True)
+            if content:
+                try:
+                    raw = json.loads(content)
+                except json.JSONDecodeError:
+                    logger.warning("ghunt: output file was not valid JSON — treating as no results")
 
         if not raw or result.returncode != 0:
+            if result.stderr:
+                logger.warning("ghunt: stderr: %s", result.stderr[:300])
             logger.info("ghunt: no results for %s", inp.email)
             output = GHuntOutput(email=inp.email, found=False)
         else:

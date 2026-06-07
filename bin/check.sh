@@ -125,7 +125,17 @@ if [[ -f "$LOCAL_GHUNT" ]]; then
 elif [[ "$GHUNT_CREDS" == "yes" ]]; then
   ok "GHunt credentials found in Docker volume"
 else
-  warn "GHunt not authenticated — run: docker compose run --rm agent ghunt login"
+  echo ""
+  echo -e "  ${YELLOW}!${NC}  GHunt not authenticated"
+  echo "     GHunt queries Google's APIs for account intel (Maps reviews, YouTube,"
+  echo "     linked services) — currently skipped on every scan."
+  echo ""
+  echo "     To enable, run this once:"
+  echo ""
+  echo -e "       ${BOLD}./bin/ghunt-login.sh${NC}"
+  echo ""
+  echo "     Follow the OAuth prompts. Credentials are saved to a Docker volume"
+  echo "     and persist across all future scans automatically."
 fi
 
 echo ""

@@ -22,7 +22,7 @@ INPUT_TYPE_MAP = {
 }
 
 POLL_INTERVAL = 10
-POLL_TIMEOUT = 300  # 5 minutes max
+POLL_TIMEOUT = 600  # 10 minutes max
 
 
 def _load_fixture() -> ToolResult:

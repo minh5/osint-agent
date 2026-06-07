@@ -1,322 +1,317 @@
 # Privacy OSINT Agent
 
 ## Purpose
-Local privacy audit tool. Runs OSINT tools against a target
-identity, analyzes results using a local Ollama model.
-No data leaves the machine.
+Local privacy audit tool. Runs OSINT tools against a target identity
+(email / phone / name / org), analyzes results using a local Ollama model,
+and produces a privacy risk report. No data leaves the machine except to
+the explicitly defined external API endpoints listed below.
 
 ## Stack
-- Python 3.11+
-- LangChain + LangGraph for orchestration
-- Ollama (llama3.1:8b) via localhost:11434
-- SpiderFoot via Docker on localhost:5001
-- UV for package management and virtual environment
+- Python 3.12
+- LangChain + LangGraph for pipeline orchestration
+- Ollama (llama3.1:8b) — local inference, runs in Docker
+- SpiderFoot — broad OSINT, runs in Docker
+- uv for package management
 - pytest for testing
-- Standard library only for output (logging, print)
+- Docker + docker-compose for all service management
 
 ---
 
-## Prerequisites (Manual Setup Required)
-All of the following must be completed before running
-the project. Do not add code that attempts to handle
-missing credentials gracefully — fail loudly with a
-clear error message pointing to this list.
+## Running the Tool
 
-### 1. Ollama
-- Download and install from ollama.com
-- Pull model: `ollama pull llama3.1:8b`
-- Verify: `curl localhost:11434`
-- No account required
-
-### 2. SpiderFoot
-- Install Docker Desktop if not already installed
-- Run: `docker run -d -p 5001:5001 --name spiderfoot spiderfoot/spiderfoot`
-- Verify UI loads at localhost:5001
-- No API key required for local instance
-
-### 3. Have I Been Pwned
-- Go to haveibeenpwned.com/API/Key
-- Purchase API key ($3.50/month)
-- Copy key to .env as HIBP_API_KEY
-
-### 4. Apify
-- Go to apify.com and create free account
-- Navigate to Settings → Integrations → API Tokens
-- Create new token, copy to .env as APIFY_API_TOKEN
-- Find "TruePeopleSearch Contact Finder" actor in Apify Store
-- Copy actor ID to .env as APIFY_ACTOR_ID
-
-### 5. Google Custom Search Engine
-- Go to programmablesearchengine.google.com
-- Create new search engine
-- Under "Sites to search" add the broker domain list
-  (Claude Code will generate this list in data/broker_domains.txt)
-- Copy Search Engine ID to .env as GOOGLE_CSE_ID
-- Go to console.cloud.google.com
-- Enable Custom Search API
-- Create API key under Credentials
-- Copy to .env as GOOGLE_CSE_API_KEY
-- Free tier: 100 queries/day
-
-### 6. EasyOptOuts
-- User has existing subscription
-- No API integration needed
-- Tool outputs dashboard link only
-- No env var required
-
-### 7. UV
-- Install: `curl -LsSf https://astral.sh/uv/install.sh | sh`
-- Verify: `uv --version`
-
----
-
-## Environment Variables Required
+### One command
+```bash
+./bin/run.sh "target@email.com"
+./bin/run.sh "John Smith"
+./bin/run.sh "+14155550100"
 ```
-HIBP_API_KEY=
-APIFY_API_TOKEN=
-APIFY_ACTOR_ID=
-GOOGLE_CSE_API_KEY=
-GOOGLE_CSE_ID=
-OLLAMA_HOST=http://localhost:11434
-SPIDERFOOT_HOST=http://localhost:5001
-TEST_MODE=false
-RESULTS_OUTPUT_PATH=output/
+
+`bin/run.sh` handles everything: starts SpiderFoot and Ollama if not running,
+waits for both to report healthy via Docker healthchecks, pulls the model if
+missing, builds the agent image if needed, then fires the scan.
+
+### Environment check
+```bash
+./bin/check.sh
+```
+
+### GHunt one-time login (optional)
+```bash
+docker compose run --rm agent ghunt login
 ```
 
 ---
 
-## Startup Validation
-config.py must validate all env vars on startup.
-If any required var is missing, print which var is
-missing and exit with code 1.
-Do not proceed with partial configuration.
-Do not use fallback defaults for missing credentials.
+## Docker Architecture
+
+Three services defined in `docker-compose.yml`:
+
+| Service | Image | Port | Role |
+|---------|-------|------|------|
+| spiderfoot | spiderfoot | 5001 | Long-lived OSINT scanner |
+| ollama | ollama/ollama | 11434 | Long-lived local LLM |
+| agent | osint-agent (built locally) | — | Fire-and-forget scan runner |
+
+- `spiderfoot` and `ollama` use `restart: unless-stopped` — start once, stay up
+- `agent` uses `profiles: [run]` — only starts via `docker compose run --rm agent`
+- `agent` has `depends_on: service_healthy` for both services
+- Ollama uses `init: true` to reap zombie subprocesses spawned during inference
+- SpiderFoot healthcheck uses `python3 urllib` (no curl in that image)
+- Ollama healthcheck uses `ollama list`
+- `bin/run.sh` uses `--no-deps` on `docker compose run` — services already verified healthy in pre-flight, no need for compose to touch them again
+
+### Volumes
+- `ollama_models` — persists downloaded models across container restarts
+- `ghunt_creds` — persists GHunt auth token (`~/.malfrats/ghunt/creds.m`)
+- `./output` — bind-mounted so reports land on the host at `./output/`
 
 ---
 
-## Architecture
-LangGraph sequential workflow with input-type routing.
-Each node is a discrete Python function.
-State passes between nodes as PipelineState (Pydantic model).
-Local model only invoked in analysis_node.
-All tool execution is deterministic Python with no LLM involvement.
+## Prerequisites
 
----
+### Required — will fail loudly without these
+1. **Docker Desktop** — `docker info` must succeed
+2. **`.env` file** — copy `.env.example`, fill all required vars
 
-## Input Handling
-intake_node accepts raw text string.
-Local model classifies into: email | phone | name | org.
-Returns InputClassification: {"type": "email", "value": "normalized@value.com"}
-Multiple inputs accepted as newline-separated string.
-Each input classified independently.
-Routes to type-specific subgraph in LangGraph.
-
----
-
-## Agent Flow
+### Required API keys (`.env`)
 ```
-START
-  → intake_node        # classify input type, normalize
-  → route              # email | phone | name | org subgraph
-  → breach_check       # HIBP
-  → broker_scan        # data broker presence (Apify + Google CSE)
-  → surface_map        # SpiderFoot recon
-  → ai_audit           # AI service exposure check
-  → analysis_node      # Ollama synthesizes findings
-  → report_node        # stdout + file output
-END
+HIBP_API_KEY=        # haveibeenpwned.com/API/Key — $3.50/month
+APIFY_API_TOKEN=     # apify.com → Settings → API Tokens (free tier ok)
+APIFY_ACTOR_ID=      # "TruePeopleSearch Contact Finder" actor ID from Apify Store
+SCRAPFLY_API_KEY=    # scrapfly.io (used by Holehe internals)
 ```
+
+### Optional
+```
+LEAKRADAR_API_KEY=   # leakradar.io — if empty, LeakRadar step is skipped gracefully
+```
+
+### Automatic (set by docker-compose, not .env)
+```
+SPIDERFOOT_HOST=http://spiderfoot:5001
+OLLAMA_HOST=http://ollama:11434
+```
+
+### Removed — do not add back
+- ~~Google Custom Search API~~ — closed to new customers as of early 2026
+- ~~EasyOptOuts API~~ — tool outputs the dashboard link only, no integration
+
+---
+
+## Pipeline
+
+```
+intake_node
+  → breach_check_node     # HIBP
+  → broker_scan_node      # Apify TruePeopleSearch (name inputs only)
+  → surface_map_node      # SpiderFoot
+  → holehe_node           # 121 platforms via password-reset probing
+  → leakradar_node        # credential leak search (skipped if no key)
+  → blackbird_node        # 600+ platforms via email
+  → maigret_node          # 3155 platforms via username
+  → ghunt_node            # Google account intel (skipped if no creds)
+  → ai_audit_node         # derives platform list from scan results, checks data policies
+  → analysis_node         # Ollama synthesizes into identity profile
+  → report_node           # writes markdown + JSON to output/
+```
+
+**Important:** `analysis_node` is the only node that passes data to Ollama.
+All other nodes are deterministic Python with no LLM involvement.
 
 ---
 
 ## Tools
 
 ### tools/hibp.py
-HIBP API v3 breach check.
-Handles email and phone inputs.
-Endpoint: GET https://haveibeenpwned.com/api/v3/breachedaccount/{account}
-Header: hibp-api-key
-Returns HibpOutput Pydantic model wrapped in ToolResult.
+HIBP API v3. Email inputs only (phone not supported by HIBP v3).
+`GET https://haveibeenpwned.com/api/v3/breachedaccount/{account}`
+Header: `hibp-api-key`. Returns `HibpOutput` with breach list.
+HIBP returns PascalCase JSON — use `alias_generator=to_pascal` + `model_validate()`.
+Spam-list-only entries return only `Name` field; all other fields are optional with defaults.
 
 ### tools/spiderfoot.py
-SpiderFoot API wrapper via localhost:5001.
-Accepts email | phone | name | org as input.
-Do NOT run all modules — restricted module list only:
-  sfp_hibp, sfp_emailrep, sfp_hunter, sfp_whois,
-  sfp_pgp, sfp_gravatar, sfp_social, sfp_pastebin
-Full scan takes 30+ mins and hits rate limits.
-Poll scan status until FINISHED before returning results.
-Returns SpiderfootOutput Pydantic model wrapped in ToolResult.
+SpiderFoot HTTP API at `SPIDERFOOT_HOST`.
+Restricted module list only (8 modules) — full scan takes 30+ mins:
+`sfp_hibp, sfp_emailrep, sfp_hunter, sfp_whois, sfp_pgp, sfp_gravatar, sfp_social, sfp_pastebin`
+Polls scan status every few seconds until FINISHED.
+`POLL_TIMEOUT = 300` (5 minutes hard cap).
 
 ### tools/broker_scan.py
-Two-phase detection.
-Phase 1A: Apify TruePeopleSearch wrapper — structured
-  profile lookup (name, address, phone, relatives).
-Phase 1B: Google CSE presence check across broker domain
-  list stored in data/broker_domains.txt.
-Results merged and deduplicated before returning.
-Calculates exposure_score 0-100 from broker count + data depth.
-Removal handled externally via EasyOptOuts — tool outputs
-  dashboard link plus prioritized broker list.
-Does NOT automate removal.
-Returns BrokerScanOutput Pydantic model wrapped in ToolResult.
+Name inputs only — email/phone return empty `BrokerScanOutput` (skip gracefully).
+Uses Apify actor client. Access run fields as attributes (`run.id`, `run.status`,
+`run.default_dataset_id`) — not `.get()`, it's a Pydantic object not a dict.
+Google CSE completely removed — API closed to new customers.
+
+### tools/holehe.py
+Uses `holehe` Python library directly (async).
+Checks 121 platforms via password-reset flow.
+Returns platforms where the email has a registered account.
+
+### tools/leakradar.py
+REST API: `POST https://api.leakradar.io/search/email`
+Bearer token auth. Skipped gracefully if `LEAKRADAR_API_KEY` is empty.
+
+### tools/blackbird.py
+Subprocess call to Blackbird (cloned to `/opt/blackbird` in Docker image at build time).
+`PYTHONPATH=src`, parses JSON output from `results/` directory.
+600+ platforms checked by email.
+Do not add a `vendor/blackbird` directory — Blackbird is baked into the image.
+
+### tools/maigret.py
+Uses `maigret.checking.maigret` async function directly (Python library, not subprocess).
+Loads `MaigretDatabase` from bundled `data.json` (3155 sites).
+Username derived from email prefix (e.g. `minh.v.mai` from `minh.v.mai@gmail.com`).
+Suppresses maigret's own logging (set to CRITICAL).
+
+### tools/ghunt.py
+Subprocess `ghunt` CLI. Requires one-time `ghunt login` to write credentials to
+`~/.malfrats/ghunt/creds.m` (persisted in `ghunt_creds` Docker volume).
+Skipped gracefully if credentials file is missing.
 
 ### tools/ai_audit.py
-Static policy database lookup.
-Reads from data/ai_policies.json.
-Accepts list of AI platform IDs from user input.
-Matches against policy database.
-Returns AiAuditOutput Pydantic model wrapped in ToolResult.
-Database updated manually — not via API.
-Covers: claude, chatgpt, gemini, grok, copilot,
-  meta_ai, perplexity, deepseek_cloud.
-
----
-
-## Tool Schemas
-Each tool in tools/ must:
-- Accept typed Pydantic input models
-- Return ToolResult envelope (never raw dicts)
-- Handle errors gracefully — return error ToolResult, never raise
-- Log what it queried (input), never log the results (output)
-- In TEST_MODE, return fixture from tests/fixtures/ instead of calling API
-
----
-
-## Pydantic Models
-All tool inputs and outputs typed with Pydantic v2.
-Models live in models/ directory.
-Every tool returns ToolResult envelope from models/shared.py.
-LangGraph state typed as PipelineState from models/shared.py.
-No untyped dicts passed between nodes — always use model instances.
-analysis_node receives PipelineState serialized to JSON string.
-analysis_node output parsed and validated against AnalysisResult.
-See models_and_fixtures.md for full model definitions and examples.
-
----
-
-## Testing
-TEST_MODE env flag (default: false).
-When true, all tools return fixtures from tests/fixtures/.
-Fixtures mirror real API response schemas exactly.
-Full pipeline must pass integration test in TEST_MODE
-before any real endpoint is called.
-pytest for all tests. 100% tool coverage required.
-
-### Build Order (follow strictly)
-1. Define fixtures (JSON files in tests/fixtures/ — no code)
-2. Write Pydantic models in models/
-3. Write tool wrappers with TEST_MODE support
-4. Write unit tests per tool against fixtures — all pass before moving on
-5. Build LangGraph graph.py and nodes.py with mocked tools
-6. Write integration test — full pipeline in TEST_MODE
-7. Flip to real endpoints only after everything is green
+Dynamic — derives platform list from actual scan results:
+`blackbird_result` accounts + `holehe_result` registrations + SpiderFoot SOCIAL_MEDIA elements.
+Checks those platforms against `data/ai_policies.json` policy database.
+NOT a static list — reflects what was actually found in the scan.
 
 ---
 
 ## Analysis Node
-Receives: PipelineState serialized to JSON string
-Model: llama3.1:8b via Ollama at localhost:11434
-Must instruct model: respond in JSON only, no preamble, no markdown
-Parse response with json.loads() — if parse fails, return error ToolResult
-Validate parsed JSON against AnalysisResult Pydantic model
-System prompt template in agent/prompts.py
+
+Sends a **compact digest** to Ollama, not the full state dump.
+`_build_analysis_digest(state)` in `nodes.py` extracts signal only:
+breach names/years/data classes, platform lists, counts, exposure scores.
+~2-3KB sent vs 50-100KB for full state — critical for local 8B model performance.
+
+Model: `llama3.1:8b`, `temperature=0`, `timeout=300`.
+
+Response handling:
+- Strip markdown code fences before `json.loads()` — model often wraps output in ` ```json `
+- Raise explicit error on empty response (blank = timeout was hit)
+- `JSONDecodeError` and all other exceptions caught — returns error fallback dict
+- Fallback result has `overall_risk_score: 0` and empty sections (pipeline always completes)
 
 ---
 
-## Output Formatting
-No Rich or third-party terminal formatting libraries.
-Use Python standard logging module for runtime output.
-Use print() for report output to stdout.
-Keep stdout clean — no ANSI codes, no spinners, no progress bars.
-Reports also written to output/ as timestamped files.
+## Output
+
+Files written to `./output/` (bind-mounted from host):
+```
+output/YYYY-MM-DD_HH-MM_email_results.json   # full PipelineState dump
+output/YYYY-MM-DD_HH-MM_email_report.md      # human-readable privacy report
+```
+
+Report sections:
+- **What the Internet Knows About You** — identity_summary + what_is_known subsections
+- **Top Risks** — up to 5 specific findings
+- **What To Do** — do_today / do_this_week / ongoing (checklist format)
+- **Raw Tool Results** — one-line summary per tool
 
 ---
 
-## Storage
-No database for v1.
-Results written to output/ as timestamped JSON + markdown.
-Filename format: YYYY-MM-DD_HH-MM_<input_type>_results.json
-Report format: YYYY-MM-DD_HH-MM_<input_type>_report.md
-output/ directory must be gitignored.
+## Tool Contract
+
+Every tool must:
+- Accept a typed Pydantic input model
+- Return `ToolResult` envelope (never raw dicts, never raise)
+- Handle errors by returning `ToolResult(success=False, error=..., data={})`
+- Log what it queried (input value), **never** log the results (output data)
+- In `TEST_MODE=true`, return fixture from `tests/fixtures/` without hitting any API
+
+---
+
+## Testing
+
+```bash
+uv run pytest
+```
+
+`TEST_MODE=true` makes all tools return fixtures. Full pipeline must pass in TEST_MODE.
+
+Build order (follow strictly):
+1. Fixtures (`tests/fixtures/*.json`)
+2. Pydantic models (`models/`)
+3. Tool wrappers with TEST_MODE
+4. Unit tests — all pass before proceeding
+5. LangGraph graph + nodes
+6. Integration test (full pipeline in TEST_MODE)
+7. Real endpoints only after everything is green
 
 ---
 
 ## Privacy Constraints
-- No API keys stored in code (use .env only)
-- .env must be gitignored
+
+- No API keys in code — `.env` only, gitignored
 - No external calls except defined tool endpoints
-- Ollama endpoint: localhost:11434 only
-- SpiderFoot endpoint: localhost:5001 only
-- Results never logged to stdout or file system logs
-- analysis_node is the only node that passes data to Ollama
+- Ollama: `http://ollama:11434` (Docker internal) only
+- SpiderFoot: `http://spiderfoot:5001` (Docker internal) only
+- Results never logged to stdout or log files
+- `analysis_node` is the only node that sends data to Ollama
 - No telemetry, no analytics, no external error reporting
 
 ---
 
-## Deployment
-CLI only: `uv run python main.py "<input>"`
-NOT a web service. No Flask/FastAPI layer.
-Config via .env only, no hardcoded paths.
-Setup: `uv sync`
-Run: `uv run python main.py "<input>"`
-Test: `uv run pytest`
-Multiple inputs: `uv run python main.py "email@example.com\nJohn Doe\n555-123-4567"`
-
----
-
 ## Project Structure
+
 ```
 osint-agent/
 ├── CLAUDE.md
 ├── .env                          # gitignored
+├── .env.example
 ├── .gitignore
+├── .dockerignore
+├── Dockerfile
+├── docker-compose.yml
 ├── pyproject.toml
-├── README.md
-├── main.py                       # entry point, arg parsing
-├── config.py                     # env var validation, startup check
+├── main.py
+├── config.py
+├── bin/
+│   ├── run.sh                    # pre-flight + scan launcher
+│   └── check.sh                  # environment verification
 ├── data/
-│   ├── ai_policies.json          # AI platform policy database
-│   └── broker_domains.txt        # broker domain list for Google CSE
+│   └── ai_policies.json
 ├── models/
-│   ├── shared.py                 # ToolResult, PipelineState, InputClassification
-│   ├── hibp.py                   # HibpInput, HibpOutput, BreachRecord
-│   ├── spiderfoot.py             # SpiderfootInput, SpiderfootOutput, SpiderfootElement
-│   ├── broker_scan.py            # BrokerScanInput, BrokerScanOutput, BrokerProfile
-│   └── ai_audit.py               # AiAuditInput, AiAuditOutput, AiPlatformPolicy
+│   ├── shared.py                 # ToolResult, PipelineState, InputClassification, AnalysisResult
+│   ├── hibp.py
+│   ├── spiderfoot.py
+│   ├── broker_scan.py
+│   ├── ai_audit.py
+│   ├── holehe.py
+│   ├── leakradar.py
+│   ├── blackbird.py
+│   ├── maigret.py
+│   └── ghunt.py
 ├── tools/
 │   ├── hibp.py
 │   ├── spiderfoot.py
 │   ├── broker_scan.py
-│   └── ai_audit.py
+│   ├── ai_audit.py
+│   ├── holehe.py
+│   ├── leakradar.py
+│   ├── blackbird.py
+│   ├── maigret.py
+│   └── ghunt.py
 ├── agent/
-│   ├── graph.py                  # LangGraph workflow definition
-│   ├── nodes.py                  # individual node functions
-│   └── prompts.py                # Ollama system prompt templates
+│   ├── graph.py
+│   ├── nodes.py                  # includes _build_analysis_digest()
+│   └── prompts.py
 ├── tests/
 │   ├── fixtures/
-│   │   ├── hibp_response.json
-│   │   ├── hibp_no_results.json
-│   │   ├── spiderfoot_response.json
-│   │   ├── broker_apify_response.json
-│   │   ├── broker_google_response.json
-│   │   ├── ai_audit_response.json
-│   │   ├── analysis_response.json
-│   │   └── error_response.json
-│   ├── test_tools.py
-│   ├── test_routing.py
-│   └── test_pipeline.py
-└── output/                       # gitignored
+│   └── test_tools.py
+└── output/                       # gitignored, bind-mounted in Docker
 ```
 
 ---
 
-## .gitignore
-```
-.env
-output/
-__pycache__/
-.pytest_cache/
-*.pyc
-.venv/
-```
+## Known Issues / Lessons Learned
+
+- **Google CSE removed** — API closed to new customers (early 2026). All broker scanning is Apify only.
+- **SpiderFoot healthcheck** — the spiderfoot image has no `curl`. Use `python3 urllib` in the healthcheck test.
+- **Ollama zombie processes** — `init: true` required in docker-compose to reap subprocesses spawned during inference.
+- **`docker compose run` recreates deps** — use `--no-deps` flag since pre-flight already verified health.
+- **Ollama empty response** — `timeout=300` needed; 120s gets truncated on complex prompts with an 8B model.
+- **Model wraps JSON in fences** — always strip ` ```json ` before `json.loads()`.
+- **Apify Run object** — access fields as attributes (`run.id`), not dict keys (`.get("id")`).
+- **HIBP PascalCase** — use `alias_generator=to_pascal` + `model_validate()`; most fields optional (spam entries return Name only).
+- **Full state to Ollama** — sending the raw `state.model_dump_json()` (50-100KB) to a local 8B model causes multi-minute hangs and empty responses. Use `_build_analysis_digest()` to send a 2-3KB summary instead.
+- **`docker compose ps --format json`** — returns a JSON array `[{...}]`, not a bare object. Parse with `json.load(sys.stdin)[0].get('Health')`.

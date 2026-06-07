@@ -253,6 +253,113 @@ def ai_audit_node(state: PipelineState) -> PipelineState:
     return state.model_copy(update={"ai_audit_result": result})
 
 
+def _build_analysis_digest(state: PipelineState) -> str:
+    """Build a compact text digest of scan results to send to the LLM.
+
+    The full state dump can be 50-100KB with hundreds of raw tool records.
+    A local 8B model given that much context is extremely slow and often
+    produces garbled output. Instead we extract the signal: counts, names,
+    severities, and a capped list of the most important findings.
+    """
+    lines: list[str] = []
+
+    # ── Target ────────────────────────────────────────────────────────────────
+    primary = state.classifications[0] if state.classifications else None
+    if primary:
+        lines.append(f"TARGET: {primary.value} (type={primary.type})")
+    lines.append("")
+
+    # ── HIBP breaches ─────────────────────────────────────────────────────────
+    if state.hibp_result and state.hibp_result.success:
+        d = state.hibp_result.data
+        lines.append(f"HIBP BREACHES: {d.get('breach_count', 0)} total")
+        for b in (d.get("breaches") or []):
+            name = b.get("name", "?")
+            year = str(b.get("breach_date", ""))[:4]
+            classes = ", ".join((b.get("data_classes") or [])[:6]) or "unknown data types"
+            spam = " [spam list]" if b.get("is_spam_list") else ""
+            lines.append(f"  - {name} ({year}): {classes}{spam}")
+        lines.append("")
+
+    # ── Holehe registrations ──────────────────────────────────────────────────
+    if state.holehe_result and state.holehe_result.success:
+        d = state.holehe_result.data
+        found = [p.get("platform") for p in (d.get("platforms_found") or [])]
+        lines.append(f"HOLEHE: {d.get('found_count', 0)} registrations found across {d.get('platforms_checked', 0)} platforms")
+        if found:
+            lines.append(f"  Platforms: {', '.join(found[:20])}")
+        lines.append("")
+
+    # ── Blackbird accounts ────────────────────────────────────────────────────
+    if state.blackbird_result and state.blackbird_result.success:
+        d = state.blackbird_result.data
+        accts = [(a.get("platform"), a.get("url")) for a in (d.get("accounts_found") or [])]
+        lines.append(f"BLACKBIRD: {d.get('found_count', 0)} accounts found")
+        for platform, url in accts[:15]:
+            lines.append(f"  - {platform}: {url}")
+        lines.append("")
+
+    # ── Maigret username profiles ─────────────────────────────────────────────
+    if state.sherlock_result and state.sherlock_result.success:
+        d = state.sherlock_result.data
+        profiles = [(p.get("platform"), p.get("url")) for p in (d.get("profiles_found") or [])]
+        lines.append(f"MAIGRET: {d.get('found_count', 0)} profiles across {d.get('platforms_checked', 0)} platforms")
+        for platform, url in profiles[:20]:
+            lines.append(f"  - {platform}: {url}")
+        lines.append("")
+
+    # ── GHunt ─────────────────────────────────────────────────────────────────
+    if state.ghunt_result and state.ghunt_result.success:
+        d = state.ghunt_result.data
+        if d.get("found"):
+            lines.append(f"GHUNT: Google account found")
+            lines.append(f"  Name: {d.get('name', 'unknown')}")
+            lines.append(f"  Services: {', '.join(d.get('google_services', []))}")
+        else:
+            lines.append("GHUNT: not run (no credentials)")
+        lines.append("")
+
+    # ── Broker scan ───────────────────────────────────────────────────────────
+    if state.broker_result and state.broker_result.success:
+        d = state.broker_result.data
+        lines.append(f"DATA BROKERS: {d.get('brokers_found_count', 0)} brokers, exposure score {d.get('exposure_score', 0)}/100")
+        for b in (d.get("brokers_found") or [])[:8]:
+            lines.append(f"  - {b.get('broker_name')}: {b.get('data_types_exposed', [])}")
+        lines.append("")
+
+    # ── LeakRadar ─────────────────────────────────────────────────────────────
+    if state.leakradar_result and state.leakradar_result.success:
+        d = state.leakradar_result.data
+        lines.append(f"LEAKRADAR: {d.get('total_results', 0)} leak results")
+        for src in (d.get("sources") or [])[:8]:
+            lines.append(f"  - {src}")
+        lines.append("")
+
+    # ── SpiderFoot ────────────────────────────────────────────────────────────
+    if state.spiderfoot_result and state.spiderfoot_result.success:
+        d = state.spiderfoot_result.data
+        elements = d.get("elements") or []
+        # Group by type, show top 10 per type
+        from collections import defaultdict
+        by_type: dict = defaultdict(list)
+        for el in elements:
+            by_type[el.get("type", "UNKNOWN")].append(el.get("data", ""))
+        lines.append(f"SPIDERFOOT: {d.get('element_count', 0)} elements")
+        for etype, vals in list(by_type.items())[:8]:
+            lines.append(f"  {etype}: {', '.join(str(v) for v in vals[:5])}")
+        lines.append("")
+
+    # ── AI audit ─────────────────────────────────────────────────────────────
+    if state.ai_audit_result and state.ai_audit_result.success:
+        d = state.ai_audit_result.data
+        lines.append(f"AI PLATFORM EXPOSURE: {d.get('high_risk_count', 0)} high-risk, overall={d.get('overall_risk', 'unknown')}")
+        for p in (d.get("platforms_found") or []):
+            lines.append(f"  - {p.get('platform')}: risk={p.get('risk_level')} data_known={p.get('data_known', [])}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def analysis_node(state: PipelineState) -> PipelineState:
     logger.info("analysis_node: synthesizing results with Ollama")
 
@@ -261,7 +368,9 @@ def analysis_node(state: PipelineState) -> PipelineState:
         analysis = json.loads(fixture_path.read_text())
         return state.model_copy(update={"analysis_result": analysis})
 
-    state_json = state.model_dump_json(indent=2)
+    # Build a compact digest — sending the full state dump (50-100KB) to a local
+    # 8B model makes inference extremely slow. Instead we extract only the signal.
+    digest = _build_analysis_digest(state)
 
     try:
         from langchain_ollama import ChatOllama
@@ -269,15 +378,27 @@ def analysis_node(state: PipelineState) -> PipelineState:
             model="llama3.1:8b",
             base_url=config.get("OLLAMA_HOST"),
             temperature=0,
+            timeout=300,  # 5 min hard cap
         )
         messages = [
             ("system", ANALYSIS_PROMPT),
-            ("human", state_json),
+            ("human", digest),
         ]
         response = llm.invoke(messages)
         raw_text = response.content
+        logger.debug("analysis_node: raw response length=%d", len(raw_text))
 
-        analysis = json.loads(raw_text)
+        # Strip markdown code fences if the model wrapped the JSON
+        stripped = raw_text.strip()
+        if stripped.startswith("```"):
+            stripped = stripped.split("\n", 1)[-1]
+            stripped = stripped.rsplit("```", 1)[0]
+        stripped = stripped.strip()
+
+        if not stripped:
+            raise json.JSONDecodeError("empty response from model", "", 0)
+
+        analysis = json.loads(stripped)
         AnalysisResult(**analysis)
         return state.model_copy(update={"analysis_result": analysis})
 
