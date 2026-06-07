@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# bin/run.sh — run an osint-agent scan
+# Usage: ./bin/run.sh "target@email.com"
+#        ./bin/run.sh "John Smith"
+#        ./bin/run.sh "+14155550100"
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+# ── Usage ─────────────────────────────────────────────────────────────────────
+if [[ $# -eq 0 ]]; then
+  echo ""
+  echo -e "${BOLD}Usage:${NC}"
+  echo "  ./bin/run.sh \"target@email.com\""
+  echo "  ./bin/run.sh \"John Smith\""
+  echo "  ./bin/run.sh \"+14155550100\""
+  echo ""
+  exit 1
+fi
+
+TARGET="$1"
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo -e "  ${BOLD}osint-agent${NC}"
+echo "  Target: $TARGET"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+# ── Pre-flight checks ─────────────────────────────────────────────────────────
+echo -e "${BOLD}Running pre-flight checks...${NC}"
+
+# Docker daemon
+if ! docker info &>/dev/null 2>&1; then
+  echo -e "${RED}✗ Docker daemon not running. Start Docker Desktop first.${NC}"
+  exit 1
+fi
+
+# .env
+if [[ ! -f "$PROJECT_DIR/.env" ]]; then
+  echo -e "${RED}✗ .env file missing. Copy .env.example and fill in values.${NC}"
+  exit 1
+fi
+
+# ── Helper: wait for a container to be Docker-healthy ─────────────────────────
+wait_healthy() {
+  local service="$1"
+  local label="$2"
+  local max_wait=120  # seconds
+  local waited=0
+
+  while [[ $waited -lt $max_wait ]]; do
+    local status
+    # Find the container for this compose service (project dir based name)
+    status=$(docker compose -f "$PROJECT_DIR/docker-compose.yml" ps --format json "$service" 2>/dev/null \
+      | python3 -c "import sys,json; data=json.load(sys.stdin); print(data[0].get('Health','') if data else '')" 2>/dev/null || echo "")
+
+    if [[ "$status" == "healthy" ]]; then
+      return 0
+    fi
+    sleep 3
+    waited=$((waited + 3))
+    if (( waited % 15 == 0 )); then
+      echo "  Still waiting for $label... (${waited}s)"
+    fi
+  done
+
+  echo -e "${RED}✗ $label did not become healthy after ${max_wait}s${NC}"
+  echo "  Check logs: docker compose logs $service"
+  exit 1
+}
+
+# ── SpiderFoot ────────────────────────────────────────────────────────────────
+SF_UP=$(docker compose -f "$PROJECT_DIR/docker-compose.yml" ps --format json spiderfoot 2>/dev/null \
+  | python3 -c "import sys,json; data=json.load(sys.stdin); print(data[0].get('Health','') if data else '')" 2>/dev/null || echo "")
+
+if [[ "$SF_UP" != "healthy" ]]; then
+  echo -e "${YELLOW}! SpiderFoot not healthy. Starting...${NC}"
+  docker compose -f "$PROJECT_DIR/docker-compose.yml" up -d spiderfoot
+  wait_healthy spiderfoot SpiderFoot
+fi
+echo -e "${GREEN}✓ SpiderFoot healthy${NC}"
+
+# ── Ollama ────────────────────────────────────────────────────────────────────
+OL_UP=$(docker compose -f "$PROJECT_DIR/docker-compose.yml" ps --format json ollama 2>/dev/null \
+  | python3 -c "import sys,json; data=json.load(sys.stdin); print(data[0].get('Health','') if data else '')" 2>/dev/null || echo "")
+
+if [[ "$OL_UP" != "healthy" ]]; then
+  echo -e "${YELLOW}! Ollama not healthy. Starting...${NC}"
+  docker compose -f "$PROJECT_DIR/docker-compose.yml" up -d ollama
+  wait_healthy ollama Ollama
+fi
+echo -e "${GREEN}✓ Ollama healthy${NC}"
+
+# ── Check llama3.1 model ──────────────────────────────────────────────────────
+if ! curl -sf http://localhost:11434/api/tags | grep -q "llama3.1"; then
+  echo -e "${YELLOW}! llama3.1:8b not found. Pulling (this may take a while)...${NC}"
+  docker compose -f "$PROJECT_DIR/docker-compose.yml" exec ollama ollama pull llama3.1:8b
+fi
+echo -e "${GREEN}✓ llama3.1:8b model ready${NC}"
+
+# ── Build agent image if needed ───────────────────────────────────────────────
+if ! docker image inspect osint-agent &>/dev/null 2>&1; then
+  echo -e "${YELLOW}! osint-agent image not found. Building...${NC}"
+  docker compose -f "$PROJECT_DIR/docker-compose.yml" build agent
+fi
+echo -e "${GREEN}✓ osint-agent image ready${NC}"
+
+echo ""
+echo -e "${GREEN}✓ All services ready${NC}"
+echo ""
+
+# ── Run scan ──────────────────────────────────────────────────────────────────
+echo -e "${BOLD}Starting scan...${NC}"
+echo ""
+
+mkdir -p "$PROJECT_DIR/output"
+
+docker compose -f "$PROJECT_DIR/docker-compose.yml" run --rm --no-deps agent "$TARGET"
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo -e "  ${GREEN}Scan complete.${NC} Reports saved to ./output/"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""

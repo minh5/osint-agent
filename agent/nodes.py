@@ -11,6 +11,11 @@ from models.hibp import HibpInput
 from models.spiderfoot import SpiderfootInput
 from models.broker_scan import BrokerScanInput
 from models.ai_audit import AiAuditInput
+from models.holehe import HoleheInput
+from models.leakradar import LeakRadarInput
+from models.blackbird import BlackbirdInput
+from models.maigret import MaigretInput
+from models.ghunt import GHuntInput
 from agent.prompts import ANALYSIS_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -104,16 +109,140 @@ def surface_map_node(state: PipelineState) -> PipelineState:
     return state.model_copy(update={"spiderfoot_result": result})
 
 
+def holehe_node(state: PipelineState) -> PipelineState:
+    from tools import holehe as holehe_tool
+
+    primary = next(
+        (c for c in state.classifications if c.type == "email"),
+        None,
+    )
+    if not primary:
+        logger.info("holehe_node: no email input, skipping")
+        return state
+
+    inp = HoleheInput(email=primary.value)
+    result = holehe_tool.run(inp)
+    if result.success:
+        logger.info("holehe_node: OK — found=%s checked=%s",
+                    result.data.get("found_count", 0),
+                    result.data.get("platforms_checked", 0))
+    else:
+        logger.error("holehe_node: FAILED — %s", result.error)
+    return state.model_copy(update={"holehe_result": result})
+
+
+def leakradar_node(state: PipelineState) -> PipelineState:
+    from tools import leakradar as leakradar_tool
+
+    primary = next(
+        (c for c in state.classifications if c.type == "email"),
+        None,
+    )
+    if not primary:
+        logger.info("leakradar_node: no email input, skipping")
+        return state
+
+    inp = LeakRadarInput(email=primary.value)
+    result = leakradar_tool.run(inp)
+    if result.success:
+        logger.info("leakradar_node: OK — total_results=%s", result.data.get("total_results", 0))
+    else:
+        logger.error("leakradar_node: FAILED — %s", result.error)
+    return state.model_copy(update={"leakradar_result": result})
+
+
+def blackbird_node(state: PipelineState) -> PipelineState:
+    from tools import blackbird as blackbird_tool
+
+    primary = next((c for c in state.classifications if c.type == "email"), None)
+    if not primary:
+        logger.info("blackbird_node: no email input, skipping")
+        return state
+
+    inp = BlackbirdInput(email=primary.value)
+    result = blackbird_tool.run(inp)
+    if result.success:
+        logger.info("blackbird_node: OK — found=%s", result.data.get("found_count", 0))
+    else:
+        logger.error("blackbird_node: FAILED — %s", result.error)
+    return state.model_copy(update={"blackbird_result": result})
+
+
+def maigret_node(state: PipelineState) -> PipelineState:
+    from tools import maigret as maigret_tool
+
+    primary = state.classifications[0] if state.classifications else None
+    if not primary:
+        logger.info("maigret_node: no input, skipping")
+        return state
+
+    if primary.type == "email":
+        username = primary.value.split("@")[0]
+    elif primary.type == "name":
+        username = primary.value.replace(" ", "").lower()
+    else:
+        logger.info("maigret_node: skipping for input_type=%s", primary.type)
+        return state
+
+    inp = MaigretInput(username=username)
+    result = maigret_tool.run(inp)
+    if result.success:
+        logger.info("maigret_node: OK — found=%s checked=%s",
+                    result.data.get("found_count", 0),
+                    result.data.get("platforms_checked", 0))
+    else:
+        logger.error("maigret_node: FAILED — %s", result.error)
+    return state.model_copy(update={"sherlock_result": result})
+
+
+def ghunt_node(state: PipelineState) -> PipelineState:
+    from tools import ghunt as ghunt_tool
+
+    primary = next((c for c in state.classifications if c.type == "email"), None)
+    if not primary:
+        logger.info("ghunt_node: no email input, skipping")
+        return state
+
+    inp = GHuntInput(email=primary.value)
+    result = ghunt_tool.run(inp)
+    if result.success:
+        logger.info("ghunt_node: OK — found=%s services=%s",
+                    result.data.get("found", False),
+                    result.data.get("google_services", []))
+    else:
+        logger.error("ghunt_node: FAILED — %s", result.error)
+    return state.model_copy(update={"ghunt_result": result})
+
+
 def ai_audit_node(state: PipelineState) -> PipelineState:
     from tools import ai_audit as audit_tool
 
-    platforms_raw = os.environ.get("AI_PLATFORMS", "")
-    if not platforms_raw:
-        logger.info("ai_audit_node: no AI_PLATFORMS env var set, skipping")
+    # Derive platforms from Blackbird + Holehe + SpiderFoot social media elements
+    platforms: set[str] = set()
+
+    if state.blackbird_result and state.blackbird_result.success:
+        for account in state.blackbird_result.data.get("accounts_found", []):
+            platforms.add(account["platform"].lower().replace(" ", "_"))
+
+    if state.holehe_result and state.holehe_result.success:
+        for match in state.holehe_result.data.get("platforms_found", []):
+            platforms.add(match["platform"].lower())
+
+    if state.spiderfoot_result and state.spiderfoot_result.success:
+        for el in state.spiderfoot_result.data.get("elements", []):
+            if el.get("type") == "SOCIAL_MEDIA":
+                # data field is typically "Platform: username" or a URL
+                raw = el.get("data", "")
+                platform = raw.split(":")[0].strip().lower().replace(" ", "_")
+                if platform:
+                    platforms.add(platform)
+
+    if not platforms:
+        logger.info("ai_audit_node: no platforms detected, skipping")
         return state
 
-    platforms = [p.strip() for p in platforms_raw.split(",") if p.strip()]
-    inp = AiAuditInput(platforms=platforms)
+    logger.info("ai_audit_node: detected platforms=%s", sorted(platforms))
+    inp = AiAuditInput(platforms=sorted(platforms))
     result = audit_tool.run(inp)
     if result.success:
         logger.info("ai_audit_node: OK — high_risk=%s overall=%s",

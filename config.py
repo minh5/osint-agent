@@ -16,6 +16,7 @@ REQUIRED_VARS = [
 OPTIONAL_VARS_WITH_DEFAULTS = {
     "TEST_MODE": "false",
     "RESULTS_OUTPUT_PATH": "output/",
+    "LEAKRADAR_API_KEY": "",
 }
 
 

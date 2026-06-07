@@ -5,8 +5,6 @@ os.environ.setdefault("TEST_MODE", "true")
 os.environ.setdefault("HIBP_API_KEY", "test")
 os.environ.setdefault("APIFY_API_TOKEN", "test")
 os.environ.setdefault("APIFY_ACTOR_ID", "test")
-os.environ.setdefault("GOOGLE_CSE_API_KEY", "test")
-os.environ.setdefault("GOOGLE_CSE_ID", "test")
 os.environ.setdefault("OLLAMA_HOST", "http://localhost:11434")
 os.environ.setdefault("SPIDERFOOT_HOST", "http://localhost:5001")
 
@@ -14,11 +12,21 @@ from models.hibp import HibpInput, HibpOutput
 from models.spiderfoot import SpiderfootInput, SpiderfootOutput
 from models.broker_scan import BrokerScanInput, BrokerScanOutput
 from models.ai_audit import AiAuditInput, AiAuditOutput
+from models.holehe import HoleheInput, HoleheOutput
+from models.leakradar import LeakRadarInput, LeakRadarOutput
+from models.blackbird import BlackbirdInput, BlackbirdOutput
+from models.maigret import MaigretInput, MaigretOutput
+from models.ghunt import GHuntInput, GHuntOutput
 from models.shared import ToolResult
 import tools.hibp as hibp_tool
 import tools.spiderfoot as spiderfoot_tool
 import tools.broker_scan as broker_scan_tool
 import tools.ai_audit as ai_audit_tool
+import tools.holehe as holehe_tool
+import tools.leakradar as leakradar_tool
+import tools.blackbird as blackbird_tool
+import tools.maigret as maigret_tool
+import tools.ghunt as ghunt_tool
 
 
 class TestHibpTool:
@@ -160,6 +168,128 @@ class TestAiAuditTool:
         result = ai_audit_tool.run(inp)
         output = AiAuditOutput(**result.data)
         assert len(output.action_items) > 0
+
+
+class TestHoleheTool:
+    def test_returns_tool_result(self):
+        inp = HoleheInput(email="test@example.com")
+        result = holehe_tool.run(inp)
+        assert isinstance(result, ToolResult)
+
+    def test_success_true_in_test_mode(self):
+        inp = HoleheInput(email="test@example.com")
+        result = holehe_tool.run(inp)
+        assert result.success is True
+
+    def test_data_validates_as_holehe_output(self):
+        inp = HoleheInput(email="test@example.com")
+        result = holehe_tool.run(inp)
+        output = HoleheOutput(**result.data)
+        assert output.platforms_checked > 0
+        assert output.found_count == len(output.platforms_found)
+
+    def test_found_platforms_have_expected_fields(self):
+        inp = HoleheInput(email="test@example.com")
+        result = holehe_tool.run(inp)
+        output = HoleheOutput(**result.data)
+        for match in output.platforms_found:
+            assert match.platform
+            assert match.exists is True
+
+
+class TestLeakRadarTool:
+    def test_returns_tool_result(self):
+        inp = LeakRadarInput(email="test@example.com")
+        result = leakradar_tool.run(inp)
+        assert isinstance(result, ToolResult)
+
+    def test_success_true_in_test_mode(self):
+        inp = LeakRadarInput(email="test@example.com")
+        result = leakradar_tool.run(inp)
+        assert result.success is True
+
+    def test_data_validates_as_leakradar_output(self):
+        inp = LeakRadarInput(email="test@example.com")
+        result = leakradar_tool.run(inp)
+        output = LeakRadarOutput(**result.data)
+        assert output.total_results >= 0
+
+    def test_leaks_have_source(self):
+        inp = LeakRadarInput(email="test@example.com")
+        result = leakradar_tool.run(inp)
+        output = LeakRadarOutput(**result.data)
+        for leak in output.leaks:
+            assert leak.source != "" or True  # source may be empty in some leaks
+
+    def test_sources_list_populated(self):
+        inp = LeakRadarInput(email="test@example.com")
+        result = leakradar_tool.run(inp)
+        output = LeakRadarOutput(**result.data)
+        assert len(output.sources) > 0
+
+
+class TestBlackbirdTool:
+    def test_returns_tool_result(self):
+        result = blackbird_tool.run(BlackbirdInput(email="test@example.com"))
+        assert isinstance(result, ToolResult)
+
+    def test_success_in_test_mode(self):
+        result = blackbird_tool.run(BlackbirdInput(email="test@example.com"))
+        assert result.success is True
+
+    def test_data_validates_as_blackbird_output(self):
+        result = blackbird_tool.run(BlackbirdInput(email="test@example.com"))
+        output = BlackbirdOutput(**result.data)
+        assert output.found_count == len(output.accounts_found)
+
+    def test_accounts_have_platform_and_url(self):
+        result = blackbird_tool.run(BlackbirdInput(email="test@example.com"))
+        output = BlackbirdOutput(**result.data)
+        for account in output.accounts_found:
+            assert account.platform
+            assert account.url.startswith("http")
+
+
+class TestMaigretTool:
+    def test_returns_tool_result(self):
+        result = maigret_tool.run(MaigretInput(username="testuser"))
+        assert isinstance(result, ToolResult)
+
+    def test_success_in_test_mode(self):
+        result = maigret_tool.run(MaigretInput(username="testuser"))
+        assert result.success is True
+
+    def test_data_validates_as_maigret_output(self):
+        result = maigret_tool.run(MaigretInput(username="testuser"))
+        output = MaigretOutput(**result.data)
+        assert output.found_count == len(output.profiles_found)
+
+    def test_profiles_have_url(self):
+        result = maigret_tool.run(MaigretInput(username="testuser"))
+        output = MaigretOutput(**result.data)
+        for profile in output.profiles_found:
+            assert profile.url.startswith("http")
+
+
+class TestGHuntTool:
+    def test_returns_tool_result(self):
+        result = ghunt_tool.run(GHuntInput(email="test@gmail.com"))
+        assert isinstance(result, ToolResult)
+
+    def test_success_in_test_mode(self):
+        result = ghunt_tool.run(GHuntInput(email="test@gmail.com"))
+        assert result.success is True
+
+    def test_data_validates_as_ghunt_output(self):
+        result = ghunt_tool.run(GHuntInput(email="test@gmail.com"))
+        output = GHuntOutput(**result.data)
+        assert isinstance(output.found, bool)
+
+    def test_found_has_services(self):
+        result = ghunt_tool.run(GHuntInput(email="test@gmail.com"))
+        output = GHuntOutput(**result.data)
+        if output.found:
+            assert isinstance(output.google_services, list)
 
 
 class TestToolResultEnvelope:

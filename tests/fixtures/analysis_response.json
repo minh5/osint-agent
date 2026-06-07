@@ -1,29 +1,61 @@
 {
   "overall_risk_score": 68,
   "overall_risk_level": "medium",
-  "summary": "Target has significant breach exposure across 3 major incidents affecting email and password data. Broker presence is moderate with 4 sites holding personal data. Two AI platforms present unresolvable training risks.",
-  "top_findings": [
-    "Email found in 3 major breaches including LinkedIn (164M accounts) and Adobe (152M accounts)",
-    "Full profile including address and relatives found on Spokeo and Whitepages",
-    "Gemini and Grok have no opt-out for training — data permanently embedded",
-    "Email found in pastebin paste dated 2024 — recent exposure",
-    "PGP key publicly linked to email — identity correlation risk"
+  "identity_summary": "The internet knows you as 'testuser' across 47 platforms including GitHub, Reddit, and Twitter. Your address at 123 Main St and phone number appear on 4 data broker sites. Credentials from 3 breaches (LinkedIn 2012, Adobe 2013, Dropbox 2012) are in circulation, including a SHA1 password hash.",
+  "what_is_known": {
+    "handles_and_usernames": [
+      "testuser (GitHub, Reddit, Twitter, Instagram)"
+    ],
+    "platforms_with_accounts": [
+      "GitHub: github.com/testuser",
+      "Twitter: twitter.com/testuser",
+      "Reddit: reddit.com/u/testuser"
+    ],
+    "physical_data": [
+      "Address: 123 Main St, San Francisco CA (Spokeo, Whitepages)",
+      "Phone: +1415555xxxx (Whitepages)",
+      "Relatives: Jane Doe, John Doe (TruthFinder)"
+    ],
+    "credentials_exposed": [
+      "Password hash (SHA1) from LinkedIn breach, May 2016",
+      "Password hash (MD5) from Adobe breach, October 2013"
+    ],
+    "google_footprint": [
+      "12 Google Maps reviews (restaurants in San Francisco)",
+      "YouTube channel: youtube.com/channel/example"
+    ],
+    "breach_history": [
+      "LinkedIn (2016-05-01) — Passwords, Email addresses",
+      "Adobe (2013-10-01) — Email addresses, Password hints",
+      "Dropbox (2012-07-01) — Email addresses, Passwords"
+    ]
+  },
+  "top_risks": [
+    "Password hash from LinkedIn 2016 breach is in active circulation — change any reused passwords immediately",
+    "Physical address and phone number appear on 4 broker sites — accessible to anyone",
+    "Username 'testuser' links accounts across 47 platforms enabling full identity correlation",
+    "Google Maps reviews reveal frequent locations including likely home neighborhood",
+    "Relatives' names and associations are publicly listed on broker sites"
   ],
-  "immediate_actions": [
-    "Opt out of Claude training at claude.ai/settings/privacy",
-    "Opt out of ChatGPT training at chat.openai.com/settings/data-controls",
-    "Submit opt-out to Spokeo at spokeo.com/optout — highest data depth",
-    "Submit opt-out to Whitepages — address and phone exposed",
-    "Change password for any accounts using credentials from Adobe or LinkedIn breach"
-  ],
-  "longer_term_actions": [
-    "Consider deleting Grok/X account if not essential — training cannot be disabled",
-    "Submit remaining broker opt-outs via EasyOptOuts dashboard",
-    "Investigate pastebin paste to understand what data was exposed",
-    "Consider email alias strategy to prevent future cross-broker correlation",
-    "Review whether PGP key should remain publicly linked to this identity"
-  ],
+  "remediation": {
+    "do_today": [
+      "Change LinkedIn password — your hash from the 2016 breach is circulating",
+      "Change Adobe password — your MD5 hash from 2013 is crackable",
+      "Enable 2FA on GitHub, Twitter, Reddit immediately"
+    ],
+    "do_this_week": [
+      "Submit opt-out to Spokeo at spokeo.com/optout — has your address and phone",
+      "Submit opt-out to Whitepages at whitepages.com/suppression-requests",
+      "Review and delete old Google Maps reviews that reveal your location patterns",
+      "Audit which sites use your LinkedIn or Adobe password — change all of them"
+    ],
+    "ongoing": [
+      "Monitor new breaches via HIBP alerts at haveibeenpwned.com",
+      "Re-submit broker opt-outs every 6 months — listings reappear",
+      "Use unique passwords per site via a password manager"
+    ]
+  },
   "breach_severity": "high",
   "broker_exposure_severity": "medium",
-  "ai_exposure_severity": "high"
+  "account_exposure_severity": "medium"
 }
