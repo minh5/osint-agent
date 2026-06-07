@@ -1,4 +1,5 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
+from pydantic.alias_generators import to_pascal
 from typing import Literal
 
 
@@ -8,22 +9,24 @@ class HibpInput(BaseModel):
 
 
 class BreachRecord(BaseModel):
+    model_config = ConfigDict(alias_generator=to_pascal, populate_by_name=True)
+
     name: str
-    title: str
-    domain: str
-    breach_date: str
-    added_date: str
-    modified_date: str
-    pwn_count: int
-    description: str
-    logo_path: str
-    data_classes: list[str]
-    is_verified: bool
-    is_fabricated: bool
-    is_sensitive: bool
-    is_retired: bool
-    is_spam_list: bool
-    is_malware: bool
+    title: str = ""
+    domain: str = ""
+    breach_date: str = ""
+    added_date: str = ""
+    modified_date: str = ""
+    pwn_count: int = 0
+    description: str = ""
+    logo_path: str = ""
+    data_classes: list[str] = []
+    is_verified: bool = False
+    is_fabricated: bool = False
+    is_sensitive: bool = False
+    is_retired: bool = False
+    is_spam_list: bool = False
+    is_malware: bool = False
 
 
 class HibpOutput(BaseModel):

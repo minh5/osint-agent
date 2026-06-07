@@ -22,7 +22,7 @@ INPUT_TYPE_MAP = {
 }
 
 POLL_INTERVAL = 10
-POLL_TIMEOUT = 1800
+POLL_TIMEOUT = 300  # 5 minutes max
 
 
 def _load_fixture() -> ToolResult:
@@ -41,37 +41,72 @@ def run(inp: SpiderfootInput) -> ToolResult:
 
     try:
         scan_resp = requests.post(
-            f"{base}/api/v1/scan",
-            json={
+            f"{base}/startscan",
+            headers={"Accept": "application/json"},
+            data={
                 "scanname": f"osint-{inp.target_type}-{int(start_time)}",
                 "scantarget": inp.target,
-                "targettype": inp.target_type,
-                "usecase": "all",
                 "modulelist": ",".join(inp.modules),
+                "typelist": "",
+                "usecase": "all",
             },
             timeout=30,
         )
         scan_resp.raise_for_status()
-        scan_id = scan_resp.json()["id"]
+        resp_json = scan_resp.json()
+        if isinstance(resp_json, list) and resp_json[0] == "ERROR":
+            raise RuntimeError(f"SpiderFoot startscan error: {resp_json[1]}")
+        if isinstance(resp_json, list) and resp_json[0] == "SUCCESS":
+            scan_id = resp_json[1]
+        else:
+            raise RuntimeError(f"Unexpected startscan response: {resp_json}")
 
         while True:
             elapsed = time.time() - start_time
             if elapsed > POLL_TIMEOUT:
                 raise TimeoutError(f"SpiderFoot scan {scan_id} timed out after {POLL_TIMEOUT}s")
 
-            status_resp = requests.get(f"{base}/api/v1/scan/{scan_id}/status", timeout=10)
+            status_resp = requests.get(
+                f"{base}/scanstatus",
+                params={"id": scan_id},
+                headers={"Accept": "application/json"},
+                timeout=10,
+            )
             status_resp.raise_for_status()
-            status = status_resp.json()["status"]
+            status_data = status_resp.json()
+            # returns [[id, name, target, started, ended, status, ...]]
+            status = status_data[0][5] if isinstance(status_data, list) and status_data else "RUNNING"
 
-            if status in ("FINISHED", "FAILED", "ABORTED"):
+            logger.info("spiderfoot: scan %s status=%s elapsed=%.0fs", scan_id, status, elapsed)
+            if status in ("FINISHED", "FAILED", "ABORTED", "ERROR-FAILED"):
                 break
             time.sleep(POLL_INTERVAL)
 
-        results_resp = requests.get(f"{base}/api/v1/scan/{scan_id}/results", timeout=30)
+        results_resp = requests.get(
+            f"{base}/scaneventresults",
+            params={"id": scan_id},
+            headers={"Accept": "application/json"},
+            timeout=60,
+        )
         results_resp.raise_for_status()
         raw_elements = results_resp.json()
 
-        elements = [SpiderfootElement(**e) for e in raw_elements]
+        # SpiderFoot returns rows as arrays:
+        # [lastseen, type, data, source_event_type, module, confidence, fp, risk, ...]
+        elements = []
+        for row in raw_elements:
+            if not isinstance(row, list) or len(row) < 8:
+                continue
+            elements.append(SpiderfootElement(
+                date_found=row[0],
+                type=row[1],
+                data=row[2],
+                source=row[3],
+                module=row[4],
+                confidence=int(row[5]) if str(row[5]).isdigit() else 0,
+                fp=int(row[6]) if str(row[6]).isdigit() else 0,
+                risk=int(row[7]) if str(row[7]).isdigit() else 0,
+            ))
         output = SpiderfootOutput(
             scan_id=scan_id,
             target=inp.target,
@@ -90,6 +125,7 @@ def run(inp: SpiderfootInput) -> ToolResult:
         )
 
     except Exception as exc:
+        logger.error("spiderfoot: FAILED — %s", exc, exc_info=True)
         return ToolResult(
             success=False,
             tool="spiderfoot",

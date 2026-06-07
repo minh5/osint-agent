@@ -52,7 +52,7 @@ def run(inp: HibpInput) -> ToolResult:
         resp.raise_for_status()
 
         raw_breaches = resp.json()
-        breaches = [BreachRecord(**b) for b in raw_breaches]
+        breaches = [BreachRecord.model_validate(b) for b in raw_breaches]
         output = HibpOutput(
             query_value=inp.value,
             breach_count=len(breaches),
@@ -69,6 +69,7 @@ def run(inp: HibpInput) -> ToolResult:
         )
 
     except Exception as exc:
+        logger.error("hibp: FAILED — %s", exc, exc_info=True)
         return ToolResult(
             success=False,
             tool="hibp",

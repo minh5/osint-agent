@@ -60,6 +60,10 @@ def breach_check_node(state: PipelineState) -> PipelineState:
 
     inp = HibpInput(input_type=primary.type, value=primary.value)
     result = hibp_tool.run(inp)
+    if result.success:
+        logger.info("breach_check_node: OK — breach_count=%s", result.data.get("breach_count", 0))
+    else:
+        logger.error("breach_check_node: FAILED — %s", result.error)
     return state.model_copy(update={"hibp_result": result})
 
 
@@ -73,6 +77,12 @@ def broker_scan_node(state: PipelineState) -> PipelineState:
 
     inp = BrokerScanInput(input_type=primary.type, value=primary.value)
     result = broker_tool.run(inp)
+    if result.success:
+        logger.info("broker_scan_node: OK — brokers_found=%s exposure_score=%s",
+                    result.data.get("brokers_found_count", 0),
+                    result.data.get("exposure_score", 0))
+    else:
+        logger.error("broker_scan_node: FAILED — %s", result.error)
     return state.model_copy(update={"broker_result": result})
 
 
@@ -87,6 +97,10 @@ def surface_map_node(state: PipelineState) -> PipelineState:
     target_type = SPIDERFOOT_TARGET_TYPE.get(primary.type, "human_name")
     inp = SpiderfootInput(target=primary.value, target_type=target_type)
     result = sf_tool.run(inp)
+    if result.success:
+        logger.info("surface_map_node: OK — elements=%s", result.data.get("element_count", 0))
+    else:
+        logger.error("surface_map_node: FAILED — %s", result.error)
     return state.model_copy(update={"spiderfoot_result": result})
 
 
@@ -101,6 +115,12 @@ def ai_audit_node(state: PipelineState) -> PipelineState:
     platforms = [p.strip() for p in platforms_raw.split(",") if p.strip()]
     inp = AiAuditInput(platforms=platforms)
     result = audit_tool.run(inp)
+    if result.success:
+        logger.info("ai_audit_node: OK — high_risk=%s overall=%s",
+                    result.data.get("high_risk_count", 0),
+                    result.data.get("overall_risk", "?"))
+    else:
+        logger.error("ai_audit_node: FAILED — %s", result.error)
     return state.model_copy(update={"ai_audit_result": result})
 
 

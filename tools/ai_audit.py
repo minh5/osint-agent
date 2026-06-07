@@ -73,6 +73,7 @@ def run(inp: AiAuditInput) -> ToolResult:
         )
 
     except Exception as exc:
+        logger.error("ai_audit: FAILED — %s", exc, exc_info=True)
         return ToolResult(
             success=False,
             tool="ai_audit",
