@@ -3,13 +3,20 @@
 FROM mcr.microsoft.com/playwright/python:v1.44.0-jammy
 
 # Extra system dependencies needed by the OSINT tools
+# zlib1g-dev + libjpeg-dev are needed by Pillow when building from source
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl ca-certificates build-essential \
+    zlib1g-dev libjpeg-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.cargo/bin:/root/.local/bin:$PATH"
+
+# Pin uv to Python 3.12 — has pre-built Pillow wheels on linux/aarch64.
+# The Playwright jammy base image ships Python 3.10 (Ubuntu 22.04 default),
+# which is below our requires-python floor; uv downloads its own 3.12 instead.
+ENV UV_PYTHON=3.12
 
 WORKDIR /app
 

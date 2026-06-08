@@ -36,6 +36,10 @@ class PipelineState(BaseModel):
     shodan_result: ToolResult | None = None
     ai_audit_result: ToolResult | None = None
     exodus_result: ToolResult | None = None
+    phone_result: ToolResult | None = None
+    public_records_result: ToolResult | None = None
+    correlation_plan: list[dict] = []
+    correlation_results: list[ToolResult] = []
     analysis_result: dict | None = None
     report_path: str | None = None
 
@@ -50,9 +54,25 @@ class WhatIsKnown(BaseModel):
 
 
 class Remediation(BaseModel):
-    do_today: list[str] = []
-    do_this_week: list[str] = []
-    ongoing: list[str] = []
+    # Credentials & access
+    change_passwords: list[str] = []
+    enable_2fa: list[str] = []
+    account_hygiene: list[str] = []  # revoke OAuth, audit sessions, delete dormant
+    # Identity fraud prevention (non-obvious high-value steps)
+    credit_freeze: list[str] = []
+    identity_fraud_prevention: list[str] = []  # IRS PIN, SSA lock, USPS
+    sim_swap_hardening: list[str] = []
+    # Account/data reviews
+    account_reviews: list[str] = []
+    # Legal removal paths — split by jurisdiction
+    gdpr_removals: list[str] = []  # EU/UK-HQ services only
+    ccpa_removals: list[str] = []  # US companies (CCPA)
+    # Data brokers
+    broker_optouts: list[str] = []
+    # Ongoing monitoring
+    monitoring: list[str] = []
+    # No action possible
+    no_action_available: list[str] = []
 
 
 class AnalysisResult(BaseModel):

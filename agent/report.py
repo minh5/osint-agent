@@ -252,58 +252,104 @@ def _write_pdf(pdf_path: Path, state: PipelineState, analysis: dict) -> None:
             )
         story.append(space(2))
 
-    # Findings context — split removable vs not
+    # Findings context — split into three buckets
     findings = analysis.get("findings_context") or []
-    actionable = [f for f in findings if f.get("removable") is not False]
+    active_removable = [
+        f
+        for f in findings
+        if f.get("removable") is not False and f.get("account_is_active") is True
+    ]
+    breach_only = [
+        f
+        for f in findings
+        if f.get("removable") is not False and f.get("account_is_active") is not True
+    ]
     no_action = [f for f in findings if f.get("removable") is False]
 
-    if actionable:
-        story += [hr(), h2("What Each Finding Means — Actionable")]
-        for f in actionable:
-            name = f.get("name", "")
-            what = f.get("what_it_is", "")
-            why = f.get("why_it_matters", "")
-            how = f.get("how_to_remove", "")
-            mech = f.get("removal_mechanism", "")
-            mech_label = {
-                "gdpr": "GDPR erasure",
-                "optout": "Opt-out",
-                "account_deletion": "Delete account",
-            }.get(mech, "")
-            block = [h3(name)]
-            if what:
-                block.append(body(f"<b>What it is:</b> {what}"))
-            if why:
-                block.append(body(f"<b>Why it matters:</b> {why}"))
-            if how:
-                block.append(body(f"<b>Removal ({mech_label}):</b> {how}"))
-            block.append(space(2))
-            story.append(KeepTogether(block))
+    mech_labels = {
+        "gdpr": "GDPR erasure (EU/UK)",
+        "ccpa": "CCPA deletion (US)",
+        "optout": "Opt-out",
+        "account_deletion": "Delete account",
+    }
+
+    def _finding_block(f: dict) -> list:
+        name = f.get("name", "")
+        what = f.get("what_it_is", "")
+        why = f.get("why_it_matters", "")
+        how = f.get("how_to_remove", "")
+        mech = f.get("removal_mechanism", "")
+        mech_label = mech_labels.get(mech, "")
+        block = [h3(name)]
+        if what:
+            block.append(body(f"<b>What it is:</b> {what}"))
+        if why:
+            block.append(body(f"<b>Why it matters:</b> {why}"))
+        if how and mech_label:
+            block.append(body(f"<b>Action ({mech_label}):</b> {how}"))
+        elif how:
+            block.append(body(f"<b>Action:</b> {how}"))
+        block.append(space(2))
+        return block
+
+    if active_removable:
+        story += [hr(), h2("Active Accounts — Take Action")]
+        story.append(
+            body(
+                "You have confirmed active accounts on these services. "
+                "Delete the account and/or submit a data deletion request."
+            )
+        )
+        story.append(space(2))
+        for f in active_removable:
+            story.append(KeepTogether(_finding_block(f)))
+
+    if breach_only:
+        story += [hr(), h2("Breach Records — Request Data Deletion")]
+        story.append(
+            body(
+                "Your data appeared in breaches from these services. You may not have an "
+                "active account, but you can still submit a CCPA or GDPR deletion request "
+                "to have your stored data removed. Breach archive copies held by third "
+                "parties cannot be removed."
+            )
+        )
+        story.append(space(2))
+        for f in breach_only:
+            story.append(KeepTogether(_finding_block(f)))
 
     if no_action:
-        story += [hr(), h2("What Each Finding Means — No Removal Available")]
-        no_action_names = []
+        story += [hr(), h2("No Action Available")]
+        story.append(
+            body(
+                "These findings are in public archives or threat intelligence datasets. "
+                "No removal is possible — monitor for future exposure."
+            )
+        )
+        story.append(space(2))
         for f in no_action:
             name = f.get("name", "")
-            what = f.get("what_it_is", "")
             why = f.get("why_it_matters", "")
-            no_action_names.append(name)
             block = [h3(name)]
-            if what:
-                block.append(body(f"<b>What it is:</b> {what}"))
             if why:
-                block.append(body(f"<b>Why it matters:</b> {why}"))
+                block.append(body(why))
             block.append(space(2))
             story.append(KeepTogether(block))
 
     # Remediation
     story += [hr(), h2("What To Do")]
     rem_sections = [
+        ("identity_fraud_prevention", "Identity Fraud Prevention (Do These First)"),
+        ("credit_freeze", "Freeze Your Credit"),
+        ("sim_swap_hardening", "SIM Swap Hardening"),
         ("change_passwords", "Change Passwords"),
         ("enable_2fa", "Enable 2FA"),
-        ("account_reviews", "Review Account Settings"),
-        ("gdpr_removals", "GDPR Removal Requests"),
+        ("account_hygiene", "Account Hygiene"),
+        ("account_reviews", "Review Privacy Settings"),
+        ("ccpa_removals", "US Data Deletion Requests (CCPA)"),
+        ("gdpr_removals", "EU/UK Erasure Requests (GDPR)"),
         ("broker_optouts", "Data Broker Opt-Outs"),
+        ("monitoring", "Ongoing Monitoring"),
     ]
     for key, title in rem_sections:
         items = remediation.get(key) or []
@@ -424,6 +470,30 @@ def _write_pdf(pdf_path: Path, state: PipelineState, analysis: dict) -> None:
         state.exodus_result,
         lambda d: f"{d.get('apps_checked',0)} apps, {d.get('high_risk_count',0)} high-risk trackers",
     )
+    _tr(
+        "Phone Lookup",
+        state.phone_result,
+        lambda d: (
+            f"valid={d.get('valid')} {d.get('line_type','?')} "
+            f"via {(d.get('carrier') or {}).get('name','?')}"
+            if d.get("valid")
+            else "invalid / no key"
+        ),
+    )
+    _tr(
+        "Public Records",
+        state.public_records_result,
+        lambda d: f"{d.get('court_case_count',0)} court cases, {d.get('corporate_record_count',0)} corporate records",
+    )
+    # Correlation summary row — show count of successful follow-up pivots
+    successful_pivots = [r for r in state.correlation_results if r.success]
+    if successful_pivots or state.correlation_plan:
+        pivot_summary = (
+            f"{len(successful_pivots)} pivot(s) executed"
+            if successful_pivots
+            else "planned but skipped"
+        )
+        tool_rows.append(("Correlation", pivot_summary))
 
     if tool_rows:
         tbl = Table(
@@ -524,52 +594,92 @@ def write_report(state: PipelineState) -> str:
             lines.append(f"- {risk}")
         lines.append("")
 
+    mech_labels_md = {
+        "gdpr": "GDPR erasure (EU/UK)",
+        "ccpa": "CCPA deletion (US)",
+        "optout": "Opt-out",
+        "account_deletion": "Delete account",
+    }
+
     findings = analysis.get("findings_context") or []
-    actionable_f = [f for f in findings if f.get("removable") is not False]
+    active_removable_f = [
+        f
+        for f in findings
+        if f.get("removable") is not False and f.get("account_is_active") is True
+    ]
+    breach_only_f = [
+        f
+        for f in findings
+        if f.get("removable") is not False and f.get("account_is_active") is not True
+    ]
     no_action_f = [f for f in findings if f.get("removable") is False]
 
-    if actionable_f:
-        lines += ["---", "", "## What Each Finding Means — Actionable", ""]
-        for f in actionable_f:
-            name = f.get("name", "")
-            what = f.get("what_it_is", "")
-            why = f.get("why_it_matters", "")
-            how = f.get("how_to_remove", "")
-            mech = f.get("removal_mechanism", "")
-            mech_label = {
-                "gdpr": "GDPR erasure",
-                "optout": "Opt-out",
-                "account_deletion": "Delete account",
-            }.get(mech, "Remove")
-            lines += [f"### {name}", ""]
-            if what:
-                lines.append(f"**What it is:** {what}  ")
-            if why:
-                lines.append(f"**Why it matters:** {why}  ")
-            if how:
-                lines.append(f"**{mech_label}:** {how}")
-            lines.append("")
+    def _md_finding(f: dict) -> list[str]:
+        name = f.get("name", "")
+        what = f.get("what_it_is", "")
+        why = f.get("why_it_matters", "")
+        how = f.get("how_to_remove", "")
+        mech = f.get("removal_mechanism", "")
+        mech_label = mech_labels_md.get(mech, "Action")
+        out = [f"### {name}", ""]
+        if what:
+            out.append(f"**What it is:** {what}  ")
+        if why:
+            out.append(f"**Why it matters:** {why}  ")
+        if how:
+            out.append(f"**{mech_label}:** {how}")
+        out.append("")
+        return out
+
+    if active_removable_f:
+        lines += ["---", "", "## Active Accounts — Take Action", ""]
+        lines.append(
+            "_You have confirmed active accounts on these services. "
+            "Delete the account and/or submit a data deletion request._"
+        )
+        lines.append("")
+        for f in active_removable_f:
+            lines += _md_finding(f)
+
+    if breach_only_f:
+        lines += ["---", "", "## Breach Records — Request Data Deletion", ""]
+        lines.append(
+            "_Your data appeared in breaches from these services. You may not have an "
+            "active account, but you can still submit a CCPA or GDPR deletion request. "
+            "Breach archive copies held by third parties cannot be removed._"
+        )
+        lines.append("")
+        for f in breach_only_f:
+            lines += _md_finding(f)
 
     if no_action_f:
-        lines += ["---", "", "## What Each Finding Means — No Removal Available", ""]
+        lines += ["---", "", "## No Action Available", ""]
+        lines.append(
+            "_These findings are in public archives or threat intel datasets. "
+            "No removal is possible._"
+        )
+        lines.append("")
         for f in no_action_f:
             name = f.get("name", "")
-            what = f.get("what_it_is", "")
             why = f.get("why_it_matters", "")
             lines += [f"### {name}", ""]
-            if what:
-                lines.append(f"**What it is:** {what}  ")
             if why:
-                lines.append(f"**Why it matters:** {why}")
+                lines.append(f"{why}")
             lines.append("")
 
     lines += ["---", "", "## What To Do", ""]
     for key, title in [
+        ("identity_fraud_prevention", "Identity Fraud Prevention (Do These First)"),
+        ("credit_freeze", "Freeze Your Credit"),
+        ("sim_swap_hardening", "SIM Swap Hardening"),
         ("change_passwords", "Change Passwords"),
         ("enable_2fa", "Enable 2FA"),
-        ("account_reviews", "Review Account Settings"),
-        ("gdpr_removals", "GDPR Removal Requests"),
+        ("account_hygiene", "Account Hygiene"),
+        ("account_reviews", "Review Privacy Settings"),
+        ("ccpa_removals", "US Data Deletion Requests (CCPA)"),
+        ("gdpr_removals", "EU/UK Erasure Requests (GDPR)"),
         ("broker_optouts", "Data Broker Opt-Outs"),
+        ("monitoring", "Ongoing Monitoring"),
     ]:
         items = remediation.get(key) or []
         if items:
@@ -663,6 +773,76 @@ def write_report(state: PipelineState) -> str:
         lines.append(
             f"- **AI Audit:** {state.ai_audit_result.data.get('high_risk_count',0)} high-risk platforms"
         )
+    if (
+        state.phone_result
+        and state.phone_result.success
+        and state.phone_result.data.get("valid")
+    ):
+        d = state.phone_result.data
+        carrier_name = (d.get("carrier") or {}).get("name", "unknown")
+        lines.append(
+            f"- **Phone:** {d.get('line_type','?')} via {carrier_name}, "
+            f"registered in {d.get('location','?')}, {d.get('country_code','')}"
+        )
+    if state.public_records_result and state.public_records_result.success:
+        d = state.public_records_result.data
+        if d.get("court_case_count") or d.get("corporate_record_count"):
+            lines.append(
+                f"- **Public Records:** {d.get('court_case_count',0)} court cases, "
+                f"{d.get('corporate_record_count',0)} corporate records"
+            )
+            for case in (d.get("court_cases") or [])[:3]:
+                lines.append(
+                    f"  - *{case.get('case_name')}* — {case.get('court')}, "
+                    f"filed {case.get('date_filed')} [{case.get('nature_of_suit','')}]"
+                )
+            for rec in (d.get("corporate_records") or [])[:3]:
+                lines.append(
+                    f"  - {rec.get('role','?').title()} at **{rec.get('company_name')}** "
+                    f"({rec.get('jurisdiction','?')}, {rec.get('status','?')})"
+                )
+
+    if state.correlation_results:
+        successful = [r for r in state.correlation_results if r.success]
+        if successful:
+            lines += ["", "### Correlation Pivots"]
+            for r in successful:
+                if r.tool == "maigret":
+                    lines.append(
+                        f"- **Username `{r.input_value}`** — "
+                        f"{r.data.get('found_count', 0)} accounts found"
+                    )
+                    for site in (r.data.get("sites_found") or [])[:5]:
+                        lines.append(f"  - {site.get('name')}: {site.get('url', '')}")
+                elif r.tool == "public_records":
+                    lines.append(
+                        f"- **Name `{r.input_value}`** — "
+                        f"{r.data.get('court_case_count', 0)} court cases, "
+                        f"{r.data.get('corporate_record_count', 0)} corporate records"
+                    )
+                elif r.tool == "shodan_scan":
+                    lines.append(
+                        f"- **IP `{r.input_value}`** — "
+                        f"{r.data.get('total_open_ports', 0)} open ports, "
+                        f"{r.data.get('total_vulns', 0)} CVEs"
+                    )
+                elif r.tool == "phone_lookup" and r.data.get("valid"):
+                    carrier = (r.data.get("carrier") or {}).get("name", "unknown")
+                    lines.append(
+                        f"- **Phone `{r.input_value}`** — "
+                        f"{r.data.get('line_type', '?')} via {carrier}, "
+                        f"registered in {r.data.get('location', '?')}"
+                    )
+                elif r.tool == "hibp":
+                    lines.append(
+                        f"- **Email `{r.input_value}` (HIBP)** — "
+                        f"{r.data.get('breach_count', 0)} breaches"
+                    )
+                elif r.tool == "holehe":
+                    lines.append(
+                        f"- **Email `{r.input_value}` (accounts)** — "
+                        f"{r.data.get('found_count', 0)} platforms"
+                    )
 
     lines += ["", f"Full results: `{json_path}`"]
 

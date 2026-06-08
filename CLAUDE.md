@@ -168,6 +168,38 @@ Subprocess `ghunt` CLI. Requires one-time `ghunt login` to write credentials to
 `~/.malfrats/ghunt/creds.m` (persisted in `ghunt_creds` Docker volume).
 Skipped gracefully if credentials file is missing.
 
+### tools/phone.py
+Two-layer lookup — works with zero API keys:
+
+**Layer 1 (always runs): `phonenumbers` (Google libphonenumber)**
+- Validates E.164 format, parses number structure
+- Carrier hint from number-range DB (not real-time, but reliable for mobile/landline/VoIP class)
+- Geographic description (`geocode`), IANA timezone(s)
+- `is_voip: true` flag if VoIP/anonymous number detected — surfaces in report as higher fraud risk
+- Fully offline, no API calls required
+
+**Layer 2 (optional supplement): Numverify (`NUMVERIFY_API_KEY` in .env)**
+- Real-time carrier name and confirmed line type
+- Free tier: 100 req/month
+- If key missing or call fails, Layer 1 baseline is used as-is
+
+### tools/public_records.py
+Two free, no-auth data sources for name inputs:
+
+**CourtListener** (`courtlistener.com/api/rest/v4/`)
+- Federal court dockets — PACER alternative, fully open
+- Requires free `COURTLISTENER_API_TOKEN` (register at courtlistener.com → profile → API)
+- Skips gracefully if token not set
+- Returns: case name, docket number, court, dates, nature of suit
+
+**OpenCorporates** (`api.opencorporates.com/v0.4/`)
+- Business registrations and officer/director roles across 140+ jurisdictions
+- Requires free `OPENCORPORATES_API_KEY` (register at opencorporates.com/api_access)
+- Skips gracefully if key not set
+- Returns: company name, role, jurisdiction, status
+
+Both skip gracefully on network failure or empty results.
+
 ### tools/ai_audit.py
 Dynamic — derives platform list from actual scan results:
 `blackbird_result` accounts + `holehe_result` registrations + SpiderFoot SOCIAL_MEDIA elements.
@@ -183,7 +215,7 @@ Sends a **compact digest** to Ollama, not the full state dump.
 breach names/years/data classes, platform lists, counts, exposure scores.
 ~2-3KB sent vs 50-100KB for full state — critical for local 8B model performance.
 
-Model: `llama3.1:8b`, `temperature=0`, `timeout=300`.
+Model: `llama3.1:8b`, `temperature=0`, `timeout=300`, `num_ctx=8192`, `num_predict=4096`.
 
 Response handling:
 - Strip markdown code fences before `json.loads()` — model often wraps output in ` ```json `
@@ -314,4 +346,30 @@ osint-agent/
 - **Apify Run object** — access fields as attributes (`run.id`), not dict keys (`.get("id")`).
 - **HIBP PascalCase** — use `alias_generator=to_pascal` + `model_validate()`; most fields optional (spam entries return Name only).
 - **Full state to Ollama** — sending the raw `state.model_dump_json()` (50-100KB) to a local 8B model causes multi-minute hangs and empty responses. Use `_build_analysis_digest()` to send a 2-3KB summary instead.
+- **Ollama `num_ctx` default is 2048** — `ANALYSIS_PROMPT` alone is ~2300 tokens, so the default context window truncates both the prompt AND the output (report shows no remediation / What To Do section). Always set `num_ctx=8192` and `num_predict=4096` on the analysis `ChatOllama` call.
 - **`docker compose ps --format json`** — returns a JSON array `[{...}]`, not a bare object. Parse with `json.load(sys.stdin)[0].get('Health')`.
+- **uv Python selection in Docker** — the Playwright jammy base image ships Python 3.10 (Ubuntu 22.04 default), below the `requires-python = ">=3.11"` floor. Setting `UV_PYTHON_PREFERENCE=only-system` then fails with "No interpreter found". Fix: set `ENV UV_PYTHON=3.12` in the Dockerfile so uv downloads exactly Python 3.12, which has pre-built Pillow wheels on linux/aarch64.
+- **CourtListener requires a free API token** — the v4 REST API returns 401 without auth. Register at courtlistener.com → profile → API token. Set `COURTLISTENER_API_TOKEN` in `.env`. Tool skips gracefully if missing.
+- **OpenCorporates requires a free API key** — returns 401 without auth. Register at opencorporates.com/api_access. Set `OPENCORPORATES_API_KEY` in `.env`. Tool skips gracefully if missing.
+- **Correlation planner LLM JSON** — llama3.1:8b sometimes outputs trailing commas or surrounding prose. `_parse_json_tolerant()` in `nodes.py` repairs trailing commas and extracts the first `{...}` block before falling back to the raw error.
+
+---
+
+## Future Paid Integrations
+
+These are prioritized by **novelty** — i.e., they surface a new type of data or attack surface not already covered by the free tool stack. Lower items are incremental improvements to existing coverage.
+
+Integrate when the tool has paying clients who justify the cost.
+
+| # | Tool | What it adds | Cost | Link |
+|---|------|-------------|------|------|
+| 1 | **PimEyes / FaceCheck.ID** | Facial recognition — reverse image search across billions of indexed photos. Zero free-tool equivalent. Finds photos of a target even without a name attached. | From $29.99/month | https://pimeyes.com / https://facecheck.id |
+| 2 | **Intelligence X (IntelX)** | Deep web, dark web, and Tor site indexing + full paste/leak archives going back years. Free tier is 2 searches/day (not viable for automated scans). Enterprise access unlocks the breach content API. | ~€7,000/year (enterprise) | https://intelx.io |
+| 3 | **DeHashed** | Raw breach record contents — actual plaintext or hashed passwords, not just "you were in this breach." Answers "what password was exposed" rather than just the breach name. | ~$5/month | https://dehashed.com |
+| 4 | **Twilio Lookup v2** | Real-time SIM swap detection (carrier line-type, ported status, identity match). Surfaces active SIM swap fraud — not detectable by any free tool. | $0.01–$0.04/lookup | https://www.twilio.com/docs/lookup/v2-api |
+| 5 | **TrueCaller** | Crowdsourced phone identity — caller name, spam score, carrier. Extends phone pivot beyond what HIBP/SpiderFoot return. Note: official API requires partnership; unofficial endpoints exist but are fragile. | Unofficial/free API (fragile) | https://www.truecaller.com/blog/features/truecaller-api |
+| 6 | **SecurityTrails** | Full DNS history and WHOIS change log for any domain. Find infrastructure a target owns or has historically operated. Extends SpiderFoot's WHOIS module with years of historical data. | ~$50/month (Freelancer) | https://securitytrails.com/corp/api |
+| 7 | **Whoxy** | Reverse WHOIS — given a name, email, or company, find all domains they've ever registered. SpiderFoot does forward WHOIS; this does the reverse at scale. | $3/1,000 queries | https://www.whoxy.com |
+| 8 | **RentCast** | Property ownership records by address or owner name. Links physical addresses to full ownership history, assessed value, and landlord relationships. US coverage only. | ~$35/month | https://app.rentcast.io/api |
+| 9 | **ProxyCurl** | LinkedIn profile data via official LinkedIn API. Returns employment history, skills, connections count without requiring a logged-in account or scraping. Fills the gap Maigret/Blackbird leave on LinkedIn. | $0.01/profile | https://nubela.co/proxycurl |
+| 10 | **OpenSanctions** | Sanctions lists, PEPs (politically exposed persons), and criminal watchlists from 100+ government sources. Relevant for high-risk clients or due diligence use cases. | Free (non-commercial) / $300/month (SaaS) | https://www.opensanctions.org |

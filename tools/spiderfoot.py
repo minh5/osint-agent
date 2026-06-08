@@ -25,7 +25,7 @@ INPUT_TYPE_MAP = {
 }
 
 POLL_INTERVAL = 10
-POLL_TIMEOUT = 600  # 10 minutes max
+POLL_TIMEOUT = 300  # 5 minutes — SpiderFoot rarely adds value past this point
 
 
 def _load_fixture() -> ToolResult:

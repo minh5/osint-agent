@@ -244,6 +244,133 @@ def _run_fastpeoplesearch(inp: BrokerScanInput) -> list[BrokerProfile]:
     return profiles
 
 
+TPS_BASE = "https://www.truepeoplesearch.com/results"
+
+
+def _run_truepeoplesearch(inp: BrokerScanInput) -> list[BrokerProfile]:
+    """Scrape TruePeopleSearch via Scrapfly.
+
+    URL: /results?name=John+Smith&citystatezip=New+York%2C+NY
+    Returns relatives, address history, age — all free, no account required.
+    """
+    try:
+        scrapfly_key = config.get("SCRAPFLY_API_KEY")
+    except RuntimeError:
+        scrapfly_key = ""
+    if not scrapfly_key:
+        logger.info("broker_scan: SCRAPFLY_API_KEY not set, skipping TruePeopleSearch")
+        return []
+
+    # Build location param: prefer "City, ST" or zip or state alone
+    location_parts = []
+    if inp.city:
+        location_parts.append(inp.city)
+    if inp.state:
+        location_parts.append(_state_to_abbrev(inp.state).upper())
+    location = ", ".join(location_parts) if location_parts else inp.zip_code or ""
+
+    params: dict = {"name": inp.value}
+    if location:
+        params["citystatezip"] = location
+
+    logger.info(
+        "broker_scan: scraping TruePeopleSearch for %s location=%s",
+        inp.value,
+        location or "(none)",
+    )
+    try:
+        resp = requests.get(
+            "https://api.scrapfly.io/scrape",
+            params={
+                "key": scrapfly_key,
+                "url": TPS_BASE,
+                "query_string": "&".join(
+                    f"{k}={requests.utils.quote(str(v))}" for k, v in params.items()
+                ),
+                "render_js": "true",
+                "asp": "true",
+                "country": "us",
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        html = resp.json().get("result", {}).get("content", "")
+    except Exception as exc:
+        logger.warning("broker_scan: TruePeopleSearch scrape failed: %s", exc)
+        return []
+
+    # TruePeopleSearch result cards: <div class="card-block shadow-form card-block-detail">
+    profiles: list[BrokerProfile] = []
+    cards = re.findall(
+        r'<div[^>]*class="[^"]*card-block[^"]*shadow-form[^"]*"[^>]*>(.*?)</div>\s*</div>\s*</div>',
+        html,
+        re.DOTALL,
+    )
+
+    for card in cards[:10]:
+        # Name — inside <span class="h4"> or <div class="h4">
+        name_m = re.search(
+            r'class="h4[^"]*"[^>]*>(.*?)</(?:span|div)>', card, re.DOTALL
+        )
+        if not name_m:
+            continue
+        name = re.sub(r"<[^>]+>", "", name_m.group(1)).strip()
+
+        # Age
+        age_m = re.search(r"Age[:\s]+(\d+)", card)
+        age = age_m.group(1) if age_m else ""
+
+        # Current location (City, ST pattern)
+        loc_m = re.search(r"([\w\s]+,\s+[A-Z]{2})", card)
+        current_loc = loc_m.group(1).strip() if loc_m else ""
+
+        # Past addresses
+        past_addresses = re.findall(
+            r"(?:lived in|previous address)[^<]*?([A-Z][^<]{5,40},\s+[A-Z]{2})",
+            card,
+            re.IGNORECASE,
+        )
+
+        # Relatives — "Also known as" or "Relatives:" section
+        relatives = re.findall(
+            r"(?:Relatives|Associated)[^<]*?<[^>]+>([A-Z][a-z]+ [A-Z][a-z]+)",
+            card,
+        )
+
+        # Profile URL
+        href_m = re.search(r'href="(/find/[^"]+)"', card)
+        profile_url = (
+            f"https://www.truepeoplesearch.com{href_m.group(1)}" if href_m else TPS_BASE
+        )
+
+        data_found = ["name"]
+        if age:
+            data_found.append("age")
+        if current_loc:
+            data_found.append("address")
+        if past_addresses:
+            data_found.append("address_history")
+        if relatives:
+            data_found.append("relatives")
+
+        profiles.append(
+            BrokerProfile(
+                broker_name=(
+                    f"TruePeopleSearch ({name})" if name else "TruePeopleSearch"
+                ),
+                broker_domain="truepeoplesearch.com",
+                source="scrapfly",
+                profile_url=profile_url,
+                data_found=data_found,
+                confidence="high",
+                optout_url="https://www.truepeoplesearch.com/removal",
+            )
+        )
+
+    logger.info("broker_scan: TruePeopleSearch returned %d profiles", len(profiles))
+    return profiles
+
+
 BAZZELL_DB_PATH = Path(__file__).parent.parent / "data" / "bazzell_brokers.json"
 
 
@@ -345,7 +472,8 @@ def run(inp: BrokerScanInput) -> ToolResult:
     try:
         apify_profiles = _run_apify(inp)
         fps_profiles = _run_fastpeoplesearch(inp)
-        all_profiles = apify_profiles + fps_profiles
+        tps_profiles = _run_truepeoplesearch(inp)
+        all_profiles = apify_profiles + fps_profiles + tps_profiles
 
         seen: set[str] = set()
         deduped: list[BrokerProfile] = []

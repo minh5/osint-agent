@@ -16,6 +16,8 @@ import tools.ghunt as ghunt_tool
 import tools.hibp as hibp_tool
 import tools.holehe as holehe_tool
 import tools.maigret as maigret_tool
+import tools.phone as phone_tool
+import tools.public_records as public_records_tool
 import tools.spiderfoot as spiderfoot_tool
 from models.ai_audit import AiAuditInput, AiAuditOutput
 from models.blackbird import BlackbirdInput, BlackbirdOutput
@@ -24,6 +26,8 @@ from models.ghunt import GHuntInput, GHuntOutput
 from models.hibp import HibpInput, HibpOutput
 from models.holehe import HoleheInput, HoleheOutput
 from models.maigret import MaigretInput, MaigretOutput
+from models.phone import PhoneInput, PhoneLookupOutput
+from models.public_records import PublicRecordsOutput
 from models.shared import ToolResult
 from models.spiderfoot import SpiderfootInput, SpiderfootOutput
 
@@ -259,6 +263,66 @@ class TestGHuntTool:
         output = GHuntOutput(**result.data)
         if output.found:
             assert isinstance(output.google_services, list)
+
+
+class TestPhoneTool:
+    def test_returns_tool_result(self):
+        result = phone_tool.run(PhoneInput(phone="+14155551234"))
+        assert isinstance(result, ToolResult)
+
+    def test_success_true_in_test_mode(self):
+        result = phone_tool.run(PhoneInput(phone="+14155551234"))
+        assert result.success is True
+
+    def test_data_validates_as_phone_output(self):
+        result = phone_tool.run(PhoneInput(phone="+14155551234"))
+        output = PhoneLookupOutput(**result.data)
+        assert output.valid is True
+        assert output.line_type == "mobile"
+
+    def test_carrier_populated(self):
+        result = phone_tool.run(PhoneInput(phone="+14155551234"))
+        output = PhoneLookupOutput(**result.data)
+        assert output.carrier is not None
+        assert output.carrier.name != ""
+
+    def test_location_populated(self):
+        result = phone_tool.run(PhoneInput(phone="+14155551234"))
+        output = PhoneLookupOutput(**result.data)
+        assert output.location != ""
+        assert output.country_code == "US"
+
+
+class TestPublicRecordsTool:
+    def test_returns_tool_result(self):
+        result = public_records_tool.run("John Doe")
+        assert isinstance(result, ToolResult)
+
+    def test_success_true_in_test_mode(self):
+        result = public_records_tool.run("John Doe")
+        assert result.success is True
+
+    def test_data_validates_as_output(self):
+        result = public_records_tool.run("John Doe")
+        output = PublicRecordsOutput(**result.data)
+        assert output.court_case_count == 1
+        assert output.corporate_record_count == 1
+
+    def test_court_case_fields(self):
+        result = public_records_tool.run("John Doe")
+        output = PublicRecordsOutput(**result.data)
+        case = output.court_cases[0]
+        assert case.case_name != ""
+        assert case.docket_number != ""
+        assert case.court != ""
+
+    def test_corporate_record_fields(self):
+        result = public_records_tool.run("John Doe")
+        output = PublicRecordsOutput(**result.data)
+        rec = output.corporate_records[0]
+        assert rec.company_name != ""
+        assert rec.role != ""
+        assert rec.jurisdiction != ""
 
 
 class TestToolResultEnvelope:

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 import config
-from agent.prompts import ANALYSIS_PROMPT
+from agent.prompts import ANALYSIS_PROMPT, CORRELATION_PROMPT
 from models.ai_audit import AiAuditInput
 from models.blackbird import BlackbirdInput
 from models.broker_scan import BrokerScanInput, BrokerScanOutput
@@ -15,6 +15,7 @@ from models.ghunt import GHuntInput
 from models.hibp import HibpInput
 from models.holehe import HoleheInput
 from models.maigret import MaigretInput
+from models.phone import PhoneInput
 from models.shared import AnalysisResult, InputClassification, PipelineState, ToolResult
 from models.shodan import ShodanInput
 from models.spiderfoot import SpiderfootInput
@@ -22,6 +23,45 @@ from models.spiderfoot import SpiderfootInput
 logger = logging.getLogger(__name__)
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _parse_json_tolerant(text: str) -> dict | list:
+    """Parse JSON with progressive repair for common LLM output quirks.
+
+    Attempts in order:
+    1. Plain json.loads (fast path)
+    2. Strip trailing commas before ] or } (most common LLM mistake)
+    3. Extract the first {...} or [...] block (handles surrounding prose)
+    Raises json.JSONDecodeError if all attempts fail.
+    """
+    # Fast path
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Repair trailing commas: ,  } or ,  ]
+    repaired = re.sub(r",\s*([\]}])", r"\1", text)
+    try:
+        return json.loads(repaired)
+    except json.JSONDecodeError:
+        pass
+
+    # Extract outermost JSON object or array
+    for start_char, end_char in [('{', '}'), ('[', ']')]:
+        start = text.find(start_char)
+        end = text.rfind(end_char)
+        if start != -1 and end > start:
+            candidate = text[start:end + 1]
+            # Also repair trailing commas in extracted fragment
+            candidate = re.sub(r",\s*([\]}])", r"\1", candidate)
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                pass
+
+    # All attempts failed — raise original error for the caller to log
+    raise json.JSONDecodeError("could not repair JSON", text, 0)
 PHONE_RE = re.compile(r"^[\d\s\-\(\)\+\.]{7,}$")
 
 SPIDERFOOT_TARGET_TYPE = {
@@ -458,6 +498,60 @@ def ai_audit_node(state: PipelineState) -> PipelineState:
     return state.model_copy(update={"ai_audit_result": result})
 
 
+def phone_pivot_node(state: PipelineState) -> PipelineState:
+    """Resolve carrier, line type, and location for phone number inputs.
+
+    No-op for email/name/org inputs — runs only when a phone classification exists.
+    Skips gracefully if NUMVERIFY_API_KEY is not set.
+    """
+    from tools import phone as phone_tool
+
+    primary = next((c for c in state.classifications if c.type == "phone"), None)
+    if not primary:
+        logger.info("phone_pivot_node: no phone input, skipping")
+        return state
+
+    inp = PhoneInput(phone=primary.value)
+    result = phone_tool.run(inp)
+    if result.success:
+        logger.info(
+            "phone_pivot_node: OK — valid=%s line_type=%s carrier=%s location=%s",
+            result.data.get("valid"),
+            result.data.get("line_type"),
+            (result.data.get("carrier") or {}).get("name", "unknown"),
+            result.data.get("location"),
+        )
+    else:
+        logger.error("phone_pivot_node: FAILED — %s", result.error)
+    return state.model_copy(update={"phone_result": result})
+
+
+def public_records_node(state: PipelineState) -> PipelineState:
+    """Search CourtListener (federal cases) and OpenCorporates (corporate roles).
+
+    Requires a resolved name — uses the same priority chain as broker_scan_node.
+    Passes state location to narrow court results when available.
+    Both APIs are free with no API key required for basic search.
+    """
+    from tools import public_records as pr_tool
+
+    name = _resolve_name(state)
+    if not name:
+        logger.info("public_records_node: no name resolved, skipping")
+        return state
+
+    result = pr_tool.run(name, state=state.location_state)
+    if result.success:
+        logger.info(
+            "public_records_node: OK — court_cases=%d corporate_records=%d",
+            result.data.get("court_case_count", 0),
+            result.data.get("corporate_record_count", 0),
+        )
+    else:
+        logger.error("public_records_node: FAILED — %s", result.error)
+    return state.model_copy(update={"public_records_result": result})
+
+
 def _build_analysis_digest(state: PipelineState) -> str:
     """Build a compact text digest of scan results to send to the LLM.
 
@@ -587,6 +681,42 @@ def _build_analysis_digest(state: PipelineState) -> str:
             lines.append(f"  - {h['ip']}: ports={ports} vulns={vulns}")
         lines.append("")
 
+    # ── Phone pivot ───────────────────────────────────────────────────────────
+    if state.phone_result and state.phone_result.success:
+        d = state.phone_result.data
+        if d.get("valid"):
+            carrier = (d.get("carrier") or {}).get("name", "unknown")
+            voip_flag = " ⚠ VoIP/anonymous number" if d.get("is_voip") else ""
+            geocode = d.get("geocode") or d.get("location") or "unknown"
+            tz = ", ".join(d.get("timezone") or []) or "unknown"
+            lines.append(
+                f"PHONE: valid=true line_type={d.get('line_type','unknown')}{voip_flag} "
+                f"carrier={carrier} location={geocode} timezone={tz} "
+                f"country={d.get('country_code','')}"
+            )
+            lines.append("")
+
+    # ── Public records ────────────────────────────────────────────────────────
+    if state.public_records_result and state.public_records_result.success:
+        d = state.public_records_result.data
+        n_cases = d.get("court_case_count", 0)
+        n_corp = d.get("corporate_record_count", 0)
+        if n_cases or n_corp:
+            lines.append(
+                f"PUBLIC RECORDS: {n_cases} court cases, {n_corp} corporate records"
+            )
+            for case in (d.get("court_cases") or [])[:5]:
+                lines.append(
+                    f"  COURT: {case.get('case_name')} | {case.get('court')} | "
+                    f"filed={case.get('date_filed')} | {case.get('nature_of_suit')}"
+                )
+            for rec in (d.get("corporate_records") or [])[:5]:
+                lines.append(
+                    f"  CORP: {rec.get('company_name')} | role={rec.get('role')} | "
+                    f"jurisdiction={rec.get('jurisdiction')} | status={rec.get('status')}"
+                )
+            lines.append("")
+
     # ── Exodus tracker audit ──────────────────────────────────────────────────
     if state.exodus_result and state.exodus_result.success:
         d = state.exodus_result.data
@@ -609,7 +739,346 @@ def _build_analysis_digest(state: PipelineState) -> str:
                 )
         lines.append("")
 
+    # ── Correlation follow-up results ─────────────────────────────────────────
+    if state.correlation_results:
+        lines.append(
+            f"CORRELATION PIVOTS: {len(state.correlation_results)} follow-up results"
+        )
+        for r in state.correlation_results:
+            if not r.success:
+                continue
+            if r.tool == "maigret":
+                found = r.data.get("found_count", 0)
+                lines.append(
+                    f"  USERNAME PIVOT ({r.input_value}): {found} accounts found"
+                )
+                for site in (r.data.get("sites_found") or [])[:5]:
+                    lines.append(f"    - {site.get('name')}: {site.get('url','')}")
+            elif r.tool == "public_records":
+                lines.append(
+                    f"  NAME PIVOT ({r.input_value}): "
+                    f"{r.data.get('court_case_count',0)} court cases, "
+                    f"{r.data.get('corporate_record_count',0)} corporate records"
+                )
+            elif r.tool == "shodan_scan":
+                lines.append(
+                    f"  IP PIVOT ({r.input_value}): "
+                    f"{r.data.get('total_open_ports',0)} open ports, "
+                    f"{r.data.get('total_vulns',0)} CVEs"
+                )
+            elif r.tool == "phone_lookup":
+                carrier = (r.data.get("carrier") or {}).get("name", "unknown")
+                voip_tag = " [VoIP]" if r.data.get("is_voip") else ""
+                geocode = r.data.get("geocode") or r.data.get("location") or "?"
+                lines.append(
+                    f"  PHONE PIVOT ({r.input_value}): "
+                    f"{r.data.get('line_type','?')}{voip_tag} via {carrier}, "
+                    f"location={geocode}"
+                )
+            elif r.tool == "hibp":
+                lines.append(
+                    f"  EMAIL PIVOT/HIBP ({r.input_value}): "
+                    f"{r.data.get('breach_count',0)} breaches"
+                )
+            elif r.tool == "holehe":
+                lines.append(
+                    f"  EMAIL PIVOT/HOLEHE ({r.input_value}): "
+                    f"{r.data.get('found_count',0)} accounts"
+                )
+        lines.append("")
+
     return "\n".join(lines)
+
+
+def _run_concurrent(
+    state: PipelineState,
+    fns: list,
+) -> PipelineState:
+    """Run node functions concurrently and merge their state updates.
+
+    Each function receives the *same* input state (safe because Wave 1 functions
+    are fully independent).  Results are diff'd against the original state and
+    merged — if two functions somehow touch the same field the last one wins,
+    but in practice each tool writes to its own dedicated result field.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    updates: dict = {}
+    with ThreadPoolExecutor(max_workers=len(fns)) as pool:
+        futures = {
+            pool.submit(fn, state): getattr(fn, "__name__", str(fn)) for fn in fns
+        }
+        for future in as_completed(futures):
+            fn_name = futures[future]
+            try:
+                result_state = future.result()
+                # Extract only the fields that changed
+                for field in PipelineState.model_fields:
+                    new_val = getattr(result_state, field)
+                    old_val = getattr(state, field)
+                    if new_val is not old_val and new_val != old_val:
+                        updates[field] = new_val
+                        logger.debug(
+                            "_run_concurrent: %s updated field=%s", fn_name, field
+                        )
+            except Exception as exc:
+                logger.error("_run_concurrent: %s raised — %s", fn_name, exc)
+
+    return state.model_copy(update=updates) if updates else state
+
+
+def wave1_scan_node(state: PipelineState) -> PipelineState:
+    """Run all input-only tools concurrently.
+
+    These tools only need state.classifications — they have no dependencies on
+    each other.  Running them in parallel reduces elapsed time from the sum of
+    their runtimes to roughly the slowest single tool (usually SpiderFoot).
+
+    Wave 1: breach_check, phone_pivot, surface_map, holehe, blackbird,
+            maigret, ghunt
+    """
+    logger.info("wave1_scan_node: starting 7 tools in parallel")
+    result = _run_concurrent(
+        state,
+        [
+            breach_check_node,
+            phone_pivot_node,
+            surface_map_node,
+            holehe_node,
+            blackbird_node,
+            maigret_node,
+            ghunt_node,
+        ],
+    )
+    logger.info("wave1_scan_node: all tools complete")
+    return result
+
+
+def wave2_scan_node(state: PipelineState) -> PipelineState:
+    """Run tools that depend on Wave 1 results, concurrently.
+
+    These tools need at least one Wave 1 result (GHunt name, SpiderFoot IPs,
+    Holehe/Blackbird platform lists) but are independent of each other.
+
+    Wave 2: exodus, broker_scan, shodan, public_records, ai_audit
+    """
+    logger.info("wave2_scan_node: starting 5 tools in parallel")
+    result = _run_concurrent(
+        state,
+        [
+            exodus_node,
+            broker_scan_node,
+            shodan_node,
+            public_records_node,
+            ai_audit_node,
+        ],
+    )
+    logger.info("wave2_scan_node: all tools complete")
+    return result
+
+
+def correlation_planner_node(state: PipelineState) -> PipelineState:
+    """Ask Ollama to identify follow-up pivots based on current scan findings.
+
+    Sends the compact digest to the LLM and parses a JSON list of up to 5 pivots.
+    Each pivot has: type (name/ip/username/phone/email), value, source, reason.
+    Skips gracefully in TEST_MODE and on any LLM/parse failure.
+    """
+    logger.info("correlation_planner_node: asking Ollama to plan follow-up pivots")
+
+    if config.is_test_mode():
+        # In test mode inject one deterministic pivot so the execute node is exercised
+        plan = [
+            {
+                "type": "username",
+                "value": "jdoe92",
+                "source": "holehe_result",
+                "reason": "Username found on multiple platforms — check full account footprint",
+            }
+        ]
+        return state.model_copy(update={"correlation_plan": plan})
+
+    digest = _build_analysis_digest(state)
+    if not digest.strip():
+        logger.info("correlation_planner_node: empty digest, skipping correlation")
+        return state
+
+    try:
+        from langchain_ollama import ChatOllama
+
+        llm = ChatOllama(  # type: ignore[call-arg]
+            model="llama3.1:8b",
+            base_url=config.get("OLLAMA_HOST"),
+            temperature=0,
+            request_timeout=120,
+            num_ctx=4096,    # CORRELATION_PROMPT + digest fits comfortably
+            num_predict=512, # small JSON array of ≤5 pivots
+        )
+        response = llm.invoke([("system", CORRELATION_PROMPT), ("human", digest)])
+        raw = (
+            response.content
+            if isinstance(response.content, str)
+            else str(response.content)
+        )
+
+        # Strip markdown fences
+        stripped = raw.strip()
+        if stripped.startswith("```"):
+            stripped = stripped.split("\n", 1)[-1].rsplit("```", 1)[0]
+        stripped = stripped.strip()
+
+        # Attempt JSON parse with progressive repair for common LLM quirks
+        data = _parse_json_tolerant(stripped)
+        pivots: list[dict] = data.get("pivots") or []
+
+        # Validate type and value presence
+        valid_types = {"name", "ip", "username", "phone", "email"}
+        pivots = [
+            p
+            for p in pivots
+            if isinstance(p, dict) and p.get("type") in valid_types and p.get("value")
+        ]
+
+        # Reject hallucinated placeholder values the LLM invents even when told not to
+        def _is_real_value(pivot: dict) -> bool:
+            v = (pivot.get("value") or "").strip()
+            t = pivot.get("type", "")
+            if not v:
+                return False
+            # Phone: reject obvious fakes — sequential digits, all same digit, too short
+            if t == "phone":
+                digits = re.sub(r"\D", "", v)
+                if len(digits) < 10:
+                    return False
+                if re.match(r"^(\d)\1+$", digits):      # all same digit: 1111111111
+                    return False
+                if re.match(r"^1?234567890?$", digits):  # 1234567890 placeholder
+                    return False
+            # IP: reject private/loopback/unspecified ranges
+            if t == "ip":
+                private = (
+                    v.startswith("192.168.")
+                    or v.startswith("10.")
+                    or v.startswith("172.")
+                    or v in ("0.0.0.0", "127.0.0.1", "255.255.255.255", "localhost")
+                    or re.match(r"^0\.0\.", v)
+                )
+                if private:
+                    return False
+            # Name: reject obvious placeholders
+            if t == "name":
+                if v.lower() in ("<name>", "unknown", "n/a", "target", "person"):
+                    return False
+            return True
+
+        pivots = [p for p in pivots if _is_real_value(p)][:5]
+
+        logger.info(
+            "correlation_planner_node: planned %d pivots: %s",
+            len(pivots),
+            [(p["type"], p["value"]) for p in pivots],
+        )
+        return state.model_copy(update={"correlation_plan": pivots})
+
+    except Exception as exc:
+        logger.warning(
+            "correlation_planner_node: failed (%s) — skipping correlation", exc
+        )
+        return state
+
+
+def correlation_execute_node(state: PipelineState) -> PipelineState:
+    """Execute each planned pivot sequentially and collect results.
+
+    Deduplicates against already-completed work so we never re-query
+    a value the initial scan already covered (e.g. the original email).
+    Results are stored in state.correlation_results and included in the
+    analysis digest so the LLM's final risk score reflects them.
+    """
+    if not state.correlation_plan:
+        logger.info("correlation_execute_node: no pivots planned, skipping")
+        return state
+
+    logger.info(
+        "correlation_execute_node: executing %d pivots", len(state.correlation_plan)
+    )
+
+    # Build a set of (type, value) pairs already covered by the initial scan
+    already_done: set[tuple[str, str]] = set()
+    for c in state.classifications:
+        already_done.add((c.type, c.value.lower()))
+
+    results: list[ToolResult] = []
+
+    for pivot in state.correlation_plan:
+        ptype = pivot.get("type", "")
+        pvalue = (pivot.get("value") or "").strip()
+        if not pvalue:
+            continue
+
+        key = (ptype, pvalue.lower())
+        if key in already_done:
+            logger.info("correlation: skipping %s=%s (already covered)", ptype, pvalue)
+            continue
+        already_done.add(key)
+
+        logger.info(
+            "correlation: running pivot type=%s value=%s reason=%s",
+            ptype,
+            pvalue,
+            pivot.get("reason", ""),
+        )
+
+        try:
+            if ptype == "username":
+                from models.maigret import MaigretInput
+                from tools import maigret as maigret_tool
+
+                result = maigret_tool.run(MaigretInput(username=pvalue))
+                results.append(result)
+
+            elif ptype == "name":
+                from tools import public_records as pr_tool
+
+                result = pr_tool.run(pvalue, state=state.location_state)
+                results.append(result)
+
+            elif ptype == "ip":
+                from models.shodan import ShodanInput
+                from tools import shodan as shodan_tool
+
+                result = shodan_tool.run(ShodanInput(ip=pvalue))
+                results.append(result)
+
+            elif ptype == "phone":
+                from models.phone import PhoneInput
+                from tools import phone as phone_tool
+
+                result = phone_tool.run(PhoneInput(phone=pvalue))
+                results.append(result)
+
+            elif ptype == "email":
+                from models.hibp import HibpInput
+                from models.holehe import HoleheInput
+                from tools import hibp as hibp_tool
+                from tools import holehe as holehe_tool
+
+                hibp_result = hibp_tool.run(HibpInput(input_type="email", value=pvalue))
+                results.append(hibp_result)
+                holehe_result = holehe_tool.run(HoleheInput(email=pvalue))
+                results.append(holehe_result)
+
+            else:
+                logger.warning("correlation: unknown pivot type %s, skipping", ptype)
+                continue
+
+        except Exception as exc:
+            logger.error(
+                "correlation: pivot type=%s value=%s FAILED — %s", ptype, pvalue, exc
+            )
+
+    logger.info("correlation_execute_node: collected %d results", len(results))
+    return state.model_copy(update={"correlation_results": results})
 
 
 def analysis_node(state: PipelineState) -> PipelineState:
@@ -637,6 +1106,8 @@ def analysis_node(state: PipelineState) -> PipelineState:
             base_url=config.get("OLLAMA_HOST"),
             temperature=0,
             request_timeout=300,  # 5 min hard cap
+            num_ctx=8192,         # ANALYSIS_PROMPT alone is ~2300 tokens; default 2048 truncates the prompt
+            num_predict=4096,     # full remediation + findings_context JSON needs ~2000-3000 tokens
         )
         messages = [
             ("system", ANALYSIS_PROMPT),
@@ -669,6 +1140,14 @@ def analysis_node(state: PipelineState) -> PipelineState:
             logger.warning(
                 "analysis_node: schema mismatch (continuing anyway): %s", val_exc
             )
+        # Enrich findings_context with real URLs from the static privacy DB.
+        # The LLM is instructed to set how_to_remove=null; we inject verified
+        # deletion URLs + correct legal frameworks here.
+        findings = analysis.get("findings_context")
+        if isinstance(findings, list):
+            from tools.privacy_url_lookup import enrich_findings_context
+
+            analysis["findings_context"] = enrich_findings_context(findings)
         return state.model_copy(update={"analysis_result": analysis})
 
     except json.JSONDecodeError as exc:
