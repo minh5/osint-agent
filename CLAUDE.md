@@ -363,7 +363,7 @@ Integrate when the tool has paying clients who justify the cost.
 
 | # | Tool | What it adds | Cost | Link |
 |---|------|-------------|------|------|
-| 1 | **PimEyes / FaceCheck.ID** | Facial recognition — reverse image search across billions of indexed photos. Zero free-tool equivalent. Finds photos of a target even without a name attached. | From $29.99/month | https://pimeyes.com / https://facecheck.id |
+| 1 | **Optery API** | Data broker removal across 635+ brokers — white-label API designed for resellers. Closes the biggest competitive gap vs. DeleteMe/Kanary. No minimums; contact support@optery.com for pricing. Handles re-population monitoring so removals don't expire silently. | Negotiated per engagement | https://www.optery.com/api/ |
 | 2 | **Intelligence X (IntelX)** | Deep web, dark web, and Tor site indexing + full paste/leak archives going back years. Free tier is 2 searches/day (not viable for automated scans). Enterprise access unlocks the breach content API. | ~€7,000/year (enterprise) | https://intelx.io |
 | 3 | **DeHashed** | Raw breach record contents — actual plaintext or hashed passwords, not just "you were in this breach." Answers "what password was exposed" rather than just the breach name. | ~$5/month | https://dehashed.com |
 | 4 | **Twilio Lookup v2** | Real-time SIM swap detection (carrier line-type, ported status, identity match). Surfaces active SIM swap fraud — not detectable by any free tool. | $0.01–$0.04/lookup | https://www.twilio.com/docs/lookup/v2-api |
