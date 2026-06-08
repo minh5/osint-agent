@@ -1,17 +1,87 @@
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+import requests
 from apify_client import ApifyClient
 
 import config
-from models.broker_scan import BrokerScanInput, BrokerScanOutput, BrokerProfile
+from models.broker_scan import BrokerProfile, BrokerScanInput, BrokerScanOutput
 from models.shared import ToolResult
 
 logger = logging.getLogger(__name__)
 
-FIXTURE_PATH = Path(__file__).parent.parent / "tests" / "fixtures" / "broker_apify_response.json"
+# Maps full state names to 2-letter abbreviations for FastPeopleSearch URL slugs
+_STATE_ABBREVS = {
+    "alabama": "al",
+    "alaska": "ak",
+    "arizona": "az",
+    "arkansas": "ar",
+    "california": "ca",
+    "colorado": "co",
+    "connecticut": "ct",
+    "delaware": "de",
+    "florida": "fl",
+    "georgia": "ga",
+    "hawaii": "hi",
+    "idaho": "id",
+    "illinois": "il",
+    "indiana": "in",
+    "iowa": "ia",
+    "kansas": "ks",
+    "kentucky": "ky",
+    "louisiana": "la",
+    "maine": "me",
+    "maryland": "md",
+    "massachusetts": "ma",
+    "michigan": "mi",
+    "minnesota": "mn",
+    "mississippi": "ms",
+    "missouri": "mo",
+    "montana": "mt",
+    "nebraska": "ne",
+    "nevada": "nv",
+    "new hampshire": "nh",
+    "new jersey": "nj",
+    "new mexico": "nm",
+    "new york": "ny",
+    "north carolina": "nc",
+    "north dakota": "nd",
+    "ohio": "oh",
+    "oklahoma": "ok",
+    "oregon": "or",
+    "pennsylvania": "pa",
+    "rhode island": "ri",
+    "south carolina": "sc",
+    "south dakota": "sd",
+    "tennessee": "tn",
+    "texas": "tx",
+    "utah": "ut",
+    "vermont": "vt",
+    "virginia": "va",
+    "washington": "wa",
+    "west virginia": "wv",
+    "wisconsin": "wi",
+    "wyoming": "wy",
+    "district of columbia": "dc",
+}
+
+
+def _state_to_abbrev(state: str) -> str:
+    """Convert full state name or abbreviation to 2-letter lowercase slug."""
+    s = state.strip().lower()
+    # Already a 2-letter abbreviation
+    if len(re.sub(r"[^a-z]", "", s)) == 2:
+        return re.sub(r"[^a-z]", "", s)
+    return _STATE_ABBREVS.get(s, s[:2])
+
+
+FIXTURE_PATH = (
+    Path(__file__).parent.parent / "tests" / "fixtures" / "broker_apify_response.json"
+)
+FPS_BASE = "https://www.fastpeoplesearch.com/name"
 
 
 def _load_fixture() -> ToolResult:
@@ -29,45 +99,211 @@ def _run_apify(inp: BrokerScanInput) -> list[BrokerProfile]:
         "searches": [],
     }
 
-    # Actor requires name + address together, or searches list
-    # For email/phone inputs we skip name lookup and rely on Google CSE instead
-    if inp.input_type == "name" and inp.first_name and inp.last_name:
-        run_input["name"] = f"{inp.first_name} {inp.last_name}"
-        run_input["address"] = inp.state or ""
-    elif inp.input_type == "name":
-        parts = inp.value.split()
-        run_input["name"] = inp.value
-        run_input["address"] = inp.state or ""
-    else:
-        # email/phone/org — actor can't search by these, return empty
-        logger.info("broker_scan: apify skipped for input_type=%s (name required)", inp.input_type)
+    # Actor requires name + address together — skip if we have no location
+    if inp.input_type != "name":
+        logger.info(
+            "broker_scan: apify skipped for input_type=%s (name required)",
+            inp.input_type,
+        )
         return []
+
+    # Build best-available address string: "City, ST  ZIP" or just state, etc.
+    addr_parts = []
+    if inp.city:
+        addr_parts.append(inp.city)
+    if inp.state:
+        addr_parts.append(inp.state)
+    if inp.zip_code:
+        addr_parts.append(inp.zip_code)
+    address = ", ".join(addr_parts)
+
+    if not address:
+        logger.info(
+            "broker_scan: apify skipped — actor requires an address/state alongside name"
+        )
+        return []
+
+    run_input["name"] = inp.value
+    run_input["address"] = address
 
     logger.info("broker_scan: starting apify actor %s", actor_id)
     client = ApifyClient(token)
     run = client.actor(actor_id).call(run_input=run_input)
-    logger.info("broker_scan: apify run finished run_id=%s status=%s",
-                run.id, run.status)
+    logger.info(
+        "broker_scan: apify run finished run_id=%s status=%s", run.id, run.status
+    )
 
     profiles = []
     for item in client.dataset(run.default_dataset_id).iterate_items():
-        profiles.append(BrokerProfile(
-            broker_name=item.get("source", "Unknown"),
-            broker_domain=item.get("domain", ""),
-            source="apify",
-            profile_url=item.get("profileUrl"),
-            data_found=item.get("dataFound", []),
-            confidence="high" if item.get("exactMatch") else "medium",
-            optout_url=item.get("optoutUrl", ""),
-        ))
+        profiles.append(
+            BrokerProfile(
+                broker_name=item.get("source", "Unknown"),
+                broker_domain=item.get("domain", ""),
+                source="apify",
+                profile_url=item.get("profileUrl"),
+                data_found=item.get("dataFound", []),
+                confidence="high" if item.get("exactMatch") else "medium",
+                optout_url=item.get("optoutUrl", ""),
+            )
+        )
 
     logger.info("broker_scan: apify returned %d profiles", len(profiles))
     return profiles
 
 
+def _run_fastpeoplesearch(inp: BrokerScanInput) -> list[BrokerProfile]:
+    """Scrape FastPeopleSearch via Scrapfly (requires render_js + asp bypass)."""
+    try:
+        scrapfly_key = config.get("SCRAPFLY_API_KEY")
+    except RuntimeError:
+        scrapfly_key = ""
+    if not scrapfly_key:
+        logger.info("broker_scan: SCRAPFLY_API_KEY not set, skipping FastPeopleSearch")
+        return []
+
+    # Build URL: /name/john-smith or /name/john-smith/ca for state-scoped search
+    name_slug = re.sub(r"[^a-zA-Z0-9\s]", "", inp.value).strip().lower()
+    name_slug = re.sub(r"\s+", "-", name_slug)
+    if inp.state:
+        state_slug = _state_to_abbrev(inp.state)
+        url = f"{FPS_BASE}/{name_slug}/{state_slug}"
+    else:
+        url = f"{FPS_BASE}/{name_slug}"
+
+    logger.info("broker_scan: scraping FastPeopleSearch for %s", inp.value)
+    try:
+        resp = requests.get(
+            "https://api.scrapfly.io/scrape",
+            params={
+                "key": scrapfly_key,
+                "url": url,
+                "render_js": "true",
+                "asp": "true",
+                "country": "us",
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        html = resp.json().get("result", {}).get("content", "")
+    except Exception as exc:
+        logger.warning("broker_scan: FastPeopleSearch scrape failed: %s", exc)
+        return []
+
+    # Parse person cards
+    profiles: list[BrokerProfile] = []
+    cards = re.findall(
+        r'<div class="card-block">(.*?)</div>\s*</div>\s*</div>', html, re.DOTALL
+    )
+    for card in cards[:10]:  # cap at 10 results
+        # Name
+        name_m = re.search(r'<span class="larger">(.*?)</span>', card)
+        if not name_m:
+            continue
+        name = re.sub(r"<[^>]+>", "", name_m.group(1)).strip()
+
+        # Age + location from subtitle
+        sub_m = re.search(r"Age\s+(\d+).*?([\w\s]+,\s+[A-Z]{2})", card)
+        age = sub_m.group(1) if sub_m else ""
+        location = sub_m.group(2).strip() if sub_m else ""
+
+        # Addresses from title attributes
+        addresses = re.findall(
+            r'title="Property Details[^"]*?for the address ([^"]+)"', card
+        )
+        addresses = list(dict.fromkeys(addresses))[:3]  # dedup, cap at 3
+
+        # Profile URL
+        href_m = re.search(r'href="(/[^"]+)"', card)
+        profile_url = (
+            f"https://www.fastpeoplesearch.com{href_m.group(1)}" if href_m else url
+        )
+
+        data_found = ["name"]
+        if age:
+            data_found.append("age")
+        if location:
+            data_found.append("address")
+        if addresses:
+            data_found.append("address_history")
+
+        profiles.append(
+            BrokerProfile(
+                broker_name=(
+                    f"FastPeopleSearch ({name})" if name else "FastPeopleSearch"
+                ),
+                broker_domain="fastpeoplesearch.com",
+                source="scrapfly",
+                profile_url=profile_url,
+                data_found=data_found,
+                confidence="high",
+                optout_url="https://www.fastpeoplesearch.com/removal",
+            )
+        )
+
+    logger.info("broker_scan: FastPeopleSearch returned %d profiles", len(profiles))
+    return profiles
+
+
+BAZZELL_DB_PATH = Path(__file__).parent.parent / "data" / "bazzell_brokers.json"
+
+
+def _cross_reference_bazzell(profiles: list[BrokerProfile]) -> dict:
+    """Cross-reference found broker profiles against Bazzell's removal database.
+
+    Returns:
+        dict with keys:
+          bazzell_tier1_found       - names of tier-1 brokers detected in scan
+          manual_removal_required   - broker names found that EasyOptOuts does NOT cover
+          easyoptouts_would_cover   - count of found brokers that EasyOptOuts covers
+    """
+    try:
+        db: list[dict] = json.loads(BAZZELL_DB_PATH.read_text())
+    except Exception as exc:
+        logger.warning("bazzell cross-reference: failed to load DB — %s", exc)
+        return {
+            "bazzell_tier1_found": [],
+            "manual_removal_required": [],
+            "easyoptouts_would_cover": 0,
+        }
+
+    # Build a domain -> record map
+    domain_map: dict[str, dict] = {entry["domain"]: entry for entry in db}
+
+    tier1_found: list[str] = []
+    manual_required: list[str] = []
+    easyoptouts_count = 0
+
+    for profile in profiles:
+        domain = (profile.broker_domain or "").lower().removeprefix("www.")
+        entry = domain_map.get(domain)
+        if not entry:
+            continue
+
+        if entry.get("tier") == 1:
+            tier1_found.append(entry["name"])
+
+        if entry.get("easyoptouts_covered"):
+            easyoptouts_count += 1
+        else:
+            manual_required.append(entry["name"])
+
+    return {
+        "bazzell_tier1_found": tier1_found,
+        "manual_removal_required": manual_required,
+        "easyoptouts_would_cover": easyoptouts_count,
+    }
+
+
 def _calculate_exposure_score(profiles: list[BrokerProfile]) -> int:
     score = 0
-    depth_weights = {"email": 15, "phone": 15, "address": 10, "relatives": 20, "name": 5, "age": 5}
+    depth_weights = {
+        "email": 15,
+        "phone": 15,
+        "address": 10,
+        "relatives": 20,
+        "name": 5,
+        "age": 5,
+    }
     for p in profiles:
         score += 5
         if p.confidence == "high":
@@ -87,7 +323,9 @@ def run(inp: BrokerScanInput) -> ToolResult:
 
     # Broker scan only meaningful for name inputs — brokers list by name/address
     if inp.input_type not in ("name",):
-        logger.info("broker_scan: skipping for input_type=%s (name required)", inp.input_type)
+        logger.info(
+            "broker_scan: skipping for input_type=%s (name required)", inp.input_type
+        )
         output = BrokerScanOutput(
             query_value=inp.value,
             brokers_found_count=0,
@@ -105,7 +343,9 @@ def run(inp: BrokerScanInput) -> ToolResult:
         )
 
     try:
-        all_profiles = _run_apify(inp)
+        apify_profiles = _run_apify(inp)
+        fps_profiles = _run_fastpeoplesearch(inp)
+        all_profiles = apify_profiles + fps_profiles
 
         seen: set[str] = set()
         deduped: list[BrokerProfile] = []
@@ -116,8 +356,12 @@ def run(inp: BrokerScanInput) -> ToolResult:
         all_profiles = deduped
 
         exposure_score = _calculate_exposure_score(all_profiles)
-        sorted_by_depth = sorted(all_profiles, key=lambda p: len(p.data_found), reverse=True)
+        sorted_by_depth = sorted(
+            all_profiles, key=lambda p: len(p.data_found), reverse=True
+        )
         priority_optouts = [p.broker_domain for p in sorted_by_depth[:5]]
+
+        bazzell = _cross_reference_bazzell(all_profiles)
 
         output = BrokerScanOutput(
             query_value=inp.value,
@@ -125,6 +369,9 @@ def run(inp: BrokerScanInput) -> ToolResult:
             brokers_found=all_profiles,
             exposure_score=exposure_score,
             priority_optouts=priority_optouts,
+            bazzell_tier1_found=bazzell["bazzell_tier1_found"],
+            manual_removal_required=bazzell["manual_removal_required"],
+            easyoptouts_covers=bazzell["easyoptouts_would_cover"],
         )
         return ToolResult(
             success=True,

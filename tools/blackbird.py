@@ -3,17 +3,18 @@ import json
 import logging
 import subprocess
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 import config
-from models.blackbird import BlackbirdInput, BlackbirdOutput, BlackbirdAccount
+from models.blackbird import BlackbirdAccount, BlackbirdInput, BlackbirdOutput
 from models.shared import ToolResult
 
 logger = logging.getLogger(__name__)
 
-FIXTURE_PATH = Path(__file__).parent.parent / "tests" / "fixtures" / "blackbird_response.json"
+FIXTURE_PATH = (
+    Path(__file__).parent.parent / "tests" / "fixtures" / "blackbird_response.json"
+)
 BLACKBIRD_DIR = (
     Path("/opt/blackbird")
     if Path("/opt/blackbird").exists()
@@ -34,18 +35,25 @@ def run(inp: BlackbirdInput) -> ToolResult:
 
     if not BLACKBIRD_DIR.exists():
         logger.warning("blackbird: vendor/blackbird not found, skipping")
-        output = BlackbirdOutput(email=inp.email, platforms_checked=0, accounts_found=[], found_count=0)
+        output = BlackbirdOutput(
+            email=inp.email, platforms_checked=0, accounts_found=[], found_count=0
+        )
         return ToolResult(
-            success=True, tool="blackbird", input_type="email", input_value=inp.email,
-            timestamp=datetime.now(timezone.utc), data=output.model_dump(),
+            success=True,
+            tool="blackbird",
+            input_type="email",
+            input_value=inp.email,
+            timestamp=datetime.now(timezone.utc),
+            data=output.model_dump(),
         )
 
     try:
         env = {"PYTHONPATH": str(BLACKBIRD_DIR / "src")}
         import os
+
         env.update({k: v for k, v in os.environ.items() if k not in env})
 
-        result = subprocess.run(
+        subprocess.run(
             [sys.executable, "blackbird.py", "--json", "-e", inp.email, "--no-update"],
             cwd=str(BLACKBIRD_DIR),
             env=env,
@@ -56,7 +64,9 @@ def run(inp: BlackbirdInput) -> ToolResult:
 
         # Find the output JSON file in results/
         pattern = str(BLACKBIRD_DIR / "results" / f"*{inp.email}*" / "*.json")
-        json_files = sorted(glob.glob(pattern), key=lambda f: Path(f).stat().st_mtime, reverse=True)
+        json_files = sorted(
+            glob.glob(pattern), key=lambda f: Path(f).stat().st_mtime, reverse=True
+        )
 
         accounts: list[BlackbirdAccount] = []
         platforms_checked = 16  # default from blackbird email-data.json
@@ -65,12 +75,14 @@ def run(inp: BlackbirdInput) -> ToolResult:
             raw_accounts = json.loads(Path(json_files[0]).read_text())
             for item in raw_accounts:
                 if item.get("status") == "FOUND":
-                    accounts.append(BlackbirdAccount(
-                        platform=item.get("name", ""),
-                        url=item.get("url", ""),
-                        category=item.get("category", ""),
-                        metadata=item.get("metadata") or [],
-                    ))
+                    accounts.append(
+                        BlackbirdAccount(
+                            platform=item.get("name", ""),
+                            url=item.get("url", ""),
+                            category=item.get("category", ""),
+                            metadata=item.get("metadata") or [],
+                        )
+                    )
         else:
             # No file = no results found
             logger.info("blackbird: no accounts found for %s", inp.email)
@@ -83,14 +95,22 @@ def run(inp: BlackbirdInput) -> ToolResult:
         )
         logger.info("blackbird: found %d accounts", len(accounts))
         return ToolResult(
-            success=True, tool="blackbird", input_type="email", input_value=inp.email,
-            timestamp=datetime.now(timezone.utc), data=output.model_dump(),
+            success=True,
+            tool="blackbird",
+            input_type="email",
+            input_value=inp.email,
+            timestamp=datetime.now(timezone.utc),
+            data=output.model_dump(),
         )
 
     except Exception as exc:
         logger.error("blackbird: FAILED — %s", exc, exc_info=True)
         return ToolResult(
-            success=False, tool="blackbird", input_type="email", input_value=inp.email,
-            timestamp=datetime.now(timezone.utc), data={},
+            success=False,
+            tool="blackbird",
+            input_type="email",
+            input_value=inp.email,
+            timestamp=datetime.now(timezone.utc),
+            data={},
             error=f"blackbird error: {exc}",
         )

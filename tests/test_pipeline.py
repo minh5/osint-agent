@@ -1,7 +1,8 @@
 import os
 import shutil
-import pytest
 from pathlib import Path
+
+import pytest
 
 os.environ["TEST_MODE"] = "true"
 os.environ.setdefault("HIBP_API_KEY", "test")
@@ -14,8 +15,8 @@ os.environ.setdefault("SPIDERFOOT_HOST", "http://localhost:5001")
 os.environ["RESULTS_OUTPUT_PATH"] = "/tmp/osint_test_output/"
 os.environ["AI_PLATFORMS"] = "claude,chatgpt,gemini,grok"
 
-from models.shared import PipelineState, AnalysisResult
 from agent.graph import build_graph
+from models.shared import AnalysisResult, PipelineState
 
 
 @pytest.fixture(autouse=True)
@@ -113,7 +114,10 @@ class TestFullPipeline:
         state = PipelineState(raw_input="test@example.com\nJohn Doe\n555-123-4567")
         result = graph.invoke(state)
         assert len(result["classifications"]) == 3
-        types = {(c.type if hasattr(c, "type") else c["type"]) for c in result["classifications"]}
+        types = {
+            (c.type if hasattr(c, "type") else c["type"])
+            for c in result["classifications"]
+        }
         assert "email" in types
         assert "name" in types
         assert "phone" in types

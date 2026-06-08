@@ -2,6 +2,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal, cast
 
 import config
 from models.ai_audit import AiAuditInput, AiAuditOutput, AiPlatformPolicy
@@ -9,7 +10,9 @@ from models.shared import ToolResult
 
 logger = logging.getLogger(__name__)
 
-FIXTURE_PATH = Path(__file__).parent.parent / "tests" / "fixtures" / "ai_audit_response.json"
+FIXTURE_PATH = (
+    Path(__file__).parent.parent / "tests" / "fixtures" / "ai_audit_response.json"
+)
 POLICY_DB_PATH = Path(__file__).parent.parent / "data" / "ai_policies.json"
 
 
@@ -20,11 +23,17 @@ def _load_fixture() -> ToolResult:
 
 def _build_action_items(policies: list[AiPlatformPolicy]) -> list[str]:
     items = []
-    for p in sorted(policies, key=lambda x: {"high": 0, "medium": 1, "low": 2}[x.risk_level]):
+    for p in sorted(
+        policies, key=lambda x: {"high": 0, "medium": 1, "low": 2}[x.risk_level]
+    ):
         if p.risk_level == "high" and not p.opt_out_available:
-            items.append(f"CRITICAL: {p.display_name} has no training opt-out — consider deleting account")
+            items.append(
+                f"CRITICAL: {p.display_name} has no training opt-out — consider deleting account"
+            )
         elif p.trains_consumer_by_default and p.opt_out_available:
-            items.append(f"ACTION: Opt out of {p.display_name} training at {p.opt_out_url}")
+            items.append(
+                f"ACTION: Opt out of {p.display_name} training at {p.opt_out_url}"
+            )
         if p.api_excluded_from_training:
             items.append(f"INFO: {p.display_name} API usage is excluded from training")
     return items[:5]
@@ -61,7 +70,7 @@ def run(inp: AiAuditInput) -> ToolResult:
             platforms_found=found,
             high_risk_count=high_risk_count,
             action_items=action_items,
-            overall_risk=overall_risk,
+            overall_risk=cast(Literal["high", "medium", "low"], overall_risk),
         )
         return ToolResult(
             success=True,

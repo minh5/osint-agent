@@ -1,4 +1,5 @@
 import os
+
 import pytest
 
 os.environ.setdefault("TEST_MODE", "true")
@@ -8,25 +9,23 @@ os.environ.setdefault("APIFY_ACTOR_ID", "test")
 os.environ.setdefault("OLLAMA_HOST", "http://localhost:11434")
 os.environ.setdefault("SPIDERFOOT_HOST", "http://localhost:5001")
 
-from models.hibp import HibpInput, HibpOutput
-from models.spiderfoot import SpiderfootInput, SpiderfootOutput
-from models.broker_scan import BrokerScanInput, BrokerScanOutput
-from models.ai_audit import AiAuditInput, AiAuditOutput
-from models.holehe import HoleheInput, HoleheOutput
-from models.leakradar import LeakRadarInput, LeakRadarOutput
-from models.blackbird import BlackbirdInput, BlackbirdOutput
-from models.maigret import MaigretInput, MaigretOutput
-from models.ghunt import GHuntInput, GHuntOutput
-from models.shared import ToolResult
-import tools.hibp as hibp_tool
-import tools.spiderfoot as spiderfoot_tool
-import tools.broker_scan as broker_scan_tool
 import tools.ai_audit as ai_audit_tool
-import tools.holehe as holehe_tool
-import tools.leakradar as leakradar_tool
 import tools.blackbird as blackbird_tool
-import tools.maigret as maigret_tool
+import tools.broker_scan as broker_scan_tool
 import tools.ghunt as ghunt_tool
+import tools.hibp as hibp_tool
+import tools.holehe as holehe_tool
+import tools.maigret as maigret_tool
+import tools.spiderfoot as spiderfoot_tool
+from models.ai_audit import AiAuditInput, AiAuditOutput
+from models.blackbird import BlackbirdInput, BlackbirdOutput
+from models.broker_scan import BrokerScanInput, BrokerScanOutput
+from models.ghunt import GHuntInput, GHuntOutput
+from models.hibp import HibpInput, HibpOutput
+from models.holehe import HoleheInput, HoleheOutput
+from models.maigret import MaigretInput, MaigretOutput
+from models.shared import ToolResult
+from models.spiderfoot import SpiderfootInput, SpiderfootOutput
 
 
 class TestHibpTool:
@@ -97,8 +96,9 @@ class TestSpiderfootTool:
     def test_default_modules_list(self):
         inp = SpiderfootInput(target="test@example.com", target_type="emailaddr")
         assert "sfp_hibp" in inp.modules
-        assert "sfp_social" in inp.modules
-        assert len(inp.modules) == 8
+        assert "sfp_emailrep" in inp.modules
+        # sfp_social removed — causes consistent timeouts; coverage via Holehe/Blackbird
+        assert len(inp.modules) == 5
 
 
 class TestBrokerScanTool:
@@ -197,37 +197,6 @@ class TestHoleheTool:
             assert match.exists is True
 
 
-class TestLeakRadarTool:
-    def test_returns_tool_result(self):
-        inp = LeakRadarInput(email="test@example.com")
-        result = leakradar_tool.run(inp)
-        assert isinstance(result, ToolResult)
-
-    def test_success_true_in_test_mode(self):
-        inp = LeakRadarInput(email="test@example.com")
-        result = leakradar_tool.run(inp)
-        assert result.success is True
-
-    def test_data_validates_as_leakradar_output(self):
-        inp = LeakRadarInput(email="test@example.com")
-        result = leakradar_tool.run(inp)
-        output = LeakRadarOutput(**result.data)
-        assert output.total_results >= 0
-
-    def test_leaks_have_source(self):
-        inp = LeakRadarInput(email="test@example.com")
-        result = leakradar_tool.run(inp)
-        output = LeakRadarOutput(**result.data)
-        for leak in output.leaks:
-            assert leak.source != "" or True  # source may be empty in some leaks
-
-    def test_sources_list_populated(self):
-        inp = LeakRadarInput(email="test@example.com")
-        result = leakradar_tool.run(inp)
-        output = LeakRadarOutput(**result.data)
-        assert len(output.sources) > 0
-
-
 class TestBlackbirdTool:
     def test_returns_tool_result(self):
         result = blackbird_tool.run(BlackbirdInput(email="test@example.com"))
@@ -296,6 +265,7 @@ class TestToolResultEnvelope:
     def test_error_result_shape(self):
         import json
         from pathlib import Path
+
         raw = json.loads(
             (Path(__file__).parent / "fixtures" / "error_response.json").read_text()
         )

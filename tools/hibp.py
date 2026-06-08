@@ -7,12 +7,14 @@ from pathlib import Path
 import requests
 
 import config
-from models.hibp import HibpInput, HibpOutput, BreachRecord
+from models.hibp import BreachRecord, HibpInput, HibpOutput
 from models.shared import ToolResult
 
 logger = logging.getLogger(__name__)
 
-FIXTURE_PATH = Path(__file__).parent.parent / "tests" / "fixtures" / "hibp_response.json"
+FIXTURE_PATH = (
+    Path(__file__).parent.parent / "tests" / "fixtures" / "hibp_response.json"
+)
 
 
 def _load_fixture() -> ToolResult:
@@ -35,7 +37,9 @@ def run(inp: HibpInput) -> ToolResult:
         resp = requests.get(url, headers=headers, params=params, timeout=10)
 
         if resp.status_code == 404:
-            output = HibpOutput(query_value=inp.value, breach_count=0, breaches=[], paste_count=0)
+            output = HibpOutput(
+                query_value=inp.value, breach_count=0, breaches=[], paste_count=0
+            )
             return ToolResult(
                 success=True,
                 tool="hibp",

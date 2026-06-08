@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # bin/run.sh — run an osint-agent scan
-# Usage: ./bin/run.sh "target@email.com"
-#        ./bin/run.sh "John Smith"
-#        ./bin/run.sh "+14155550100"
+# Usage: ./bin/run.sh --email target@example.com
+#        ./bin/run.sh --name "John Smith" --state CA
+#        ./bin/run.sh --email addr@example.com --name "John Smith" --state CA --phone +14155550100
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,19 +18,32 @@ NC='\033[0m'
 if [[ $# -eq 0 ]]; then
   echo ""
   echo -e "${BOLD}Usage:${NC}"
-  echo "  ./bin/run.sh \"target@email.com\""
-  echo "  ./bin/run.sh \"John Smith\""
-  echo "  ./bin/run.sh \"+14155550100\""
+  echo "  ./bin/run.sh --email target@example.com"
+  echo "  ./bin/run.sh --name \"John Smith\" --state CA"
+  echo "  ./bin/run.sh --name \"John Smith\" --city \"San Francisco\" --state CA --zip 94102"
+  echo "  ./bin/run.sh --email target@example.com --name \"John Smith\" --state NY --phone +14155550100"
+  echo ""
+  echo -e "${BOLD}Flags:${NC}"
+  echo "  --email   Target email address"
+  echo "  --phone   Target phone number"
+  echo "  --name    Target full name  (requires at least one of: --city, --state, --zip)"
+  echo "  --city    Target city       (narrows broker search results)"
+  echo "  --state   Target state, e.g. CA or 'California'  (required with --name)"
+  echo "  --zip     Target zip code   (further narrows broker search)"
+  echo ""
+  echo "At least one of --email, --phone, or --name is required."
+  echo "When using --name, you must also provide --city, --state, or --zip."
   echo ""
   exit 1
 fi
 
-TARGET="$1"
+# Forward all flags to main.py — validation/sanitization happens there
+AGENT_ARGS=("$@")
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo -e "  ${BOLD}osint-agent${NC}"
-echo "  Target: $TARGET"
+echo "  Inputs: ${AGENT_ARGS[*]}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
@@ -142,7 +155,7 @@ echo ""
 
 mkdir -p "$PROJECT_DIR/output"
 
-docker compose -f "$PROJECT_DIR/docker-compose.yml" run --rm --no-deps agent "$TARGET"
+docker compose -f "$PROJECT_DIR/docker-compose.yml" run --rm --no-deps agent "${AGENT_ARGS[@]}"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

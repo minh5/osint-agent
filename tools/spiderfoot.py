@@ -3,16 +3,19 @@ import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal, cast
 
 import requests
 
 import config
-from models.spiderfoot import SpiderfootInput, SpiderfootOutput, SpiderfootElement
 from models.shared import ToolResult
+from models.spiderfoot import SpiderfootElement, SpiderfootInput, SpiderfootOutput
 
 logger = logging.getLogger(__name__)
 
-FIXTURE_PATH = Path(__file__).parent.parent / "tests" / "fixtures" / "spiderfoot_response.json"
+FIXTURE_PATH = (
+    Path(__file__).parent.parent / "tests" / "fixtures" / "spiderfoot_response.json"
+)
 
 INPUT_TYPE_MAP = {
     "email": "emailaddr",
@@ -61,10 +64,24 @@ def run(inp: SpiderfootInput) -> ToolResult:
         else:
             raise RuntimeError(f"Unexpected startscan response: {resp_json}")
 
+        timed_out = False
         while True:
             elapsed = time.time() - start_time
             if elapsed > POLL_TIMEOUT:
-                raise TimeoutError(f"SpiderFoot scan {scan_id} timed out after {POLL_TIMEOUT}s")
+                # Don't discard 10 minutes of collected data — abort the scan
+                # and fetch whatever SpiderFoot found so far
+                logger.warning(
+                    "spiderfoot: scan %s timed out after %.0fs — aborting and fetching partial results",
+                    scan_id,
+                    elapsed,
+                )
+                try:
+                    requests.get(f"{base}/stopscan", params={"id": scan_id}, timeout=10)
+                except Exception:
+                    pass
+                timed_out = True
+                status = "PARTIAL"
+                break
 
             status_resp = requests.get(
                 f"{base}/scanstatus",
@@ -75,9 +92,15 @@ def run(inp: SpiderfootInput) -> ToolResult:
             status_resp.raise_for_status()
             status_data = status_resp.json()
             # returns [[id, name, target, started, ended, status, ...]]
-            status = status_data[0][5] if isinstance(status_data, list) and status_data else "RUNNING"
+            status = (
+                status_data[0][5]
+                if isinstance(status_data, list) and status_data
+                else "RUNNING"
+            )
 
-            logger.info("spiderfoot: scan %s status=%s elapsed=%.0fs", scan_id, status, elapsed)
+            logger.info(
+                "spiderfoot: scan %s status=%s elapsed=%.0fs", scan_id, status, elapsed
+            )
             if status in ("FINISHED", "FAILED", "ABORTED", "ERROR-FAILED"):
                 break
             time.sleep(POLL_INTERVAL)
@@ -97,28 +120,42 @@ def run(inp: SpiderfootInput) -> ToolResult:
         for row in raw_elements:
             if not isinstance(row, list) or len(row) < 8:
                 continue
-            elements.append(SpiderfootElement(
-                date_found=row[0],
-                type=row[1],
-                data=row[2],
-                source=row[3],
-                module=row[4],
-                confidence=int(row[5]) if str(row[5]).isdigit() else 0,
-                fp=int(row[6]) if str(row[6]).isdigit() else 0,
-                risk=int(row[7]) if str(row[7]).isdigit() else 0,
-            ))
+            elements.append(
+                SpiderfootElement(
+                    date_found=row[0],
+                    type=row[1],
+                    data=row[2],
+                    source=row[3],
+                    module=row[4],
+                    confidence=int(row[5]) if str(row[5]).isdigit() else 0,
+                    fp=int(row[6]) if str(row[6]).isdigit() else 0,
+                    risk=int(row[7]) if str(row[7]).isdigit() else 0,
+                )
+            )
+        if timed_out:
+            logger.info(
+                "spiderfoot: partial results — %d elements collected before timeout",
+                len(elements),
+            )
+        _sf_status = cast(
+            Literal["FINISHED", "FAILED", "RUNNING", "ABORTED", "PARTIAL"], status
+        )
         output = SpiderfootOutput(
             scan_id=scan_id,
             target=inp.target,
-            status=status,
+            status=_sf_status,
             element_count=len(elements),
             elements=elements,
             duration_seconds=int(time.time() - start_time),
         )
+        _input_type = cast(
+            Literal["email", "phone", "name", "org"],
+            next(k for k, v in INPUT_TYPE_MAP.items() if v == inp.target_type),
+        )
         return ToolResult(
             success=True,
             tool="spiderfoot",
-            input_type=next(k for k, v in INPUT_TYPE_MAP.items() if v == inp.target_type),
+            input_type=_input_type,
             input_value=inp.target,
             timestamp=datetime.now(timezone.utc),
             data=output.model_dump(),
@@ -126,10 +163,16 @@ def run(inp: SpiderfootInput) -> ToolResult:
 
     except Exception as exc:
         logger.error("spiderfoot: FAILED — %s", exc, exc_info=True)
+        _err_input_type = cast(
+            Literal["email", "phone", "name", "org"],
+            next(
+                (k for k, v in INPUT_TYPE_MAP.items() if v == inp.target_type), "email"
+            ),
+        )
         return ToolResult(
             success=False,
             tool="spiderfoot",
-            input_type=next((k for k, v in INPUT_TYPE_MAP.items() if v == inp.target_type), "email"),
+            input_type=_err_input_type,
             input_value=inp.target,
             timestamp=datetime.now(timezone.utc),
             data={},

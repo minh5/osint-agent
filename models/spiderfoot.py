@@ -1,5 +1,6 @@
-from pydantic import BaseModel
 from typing import Literal
+
+from pydantic import BaseModel, field_validator
 
 
 class SpiderfootInput(BaseModel):
@@ -9,11 +10,11 @@ class SpiderfootInput(BaseModel):
         # Fast API-based modules only — sfp_social and sfp_pastebin do
         # extensive crawling and routinely cause timeouts. Social coverage
         # is handled better by Holehe/Blackbird/Maigret anyway.
-        "sfp_hibp",       # breach cross-check
-        "sfp_emailrep",   # email reputation + risk score
-        "sfp_gravatar",   # profile photo, display name, linked accounts
-        "sfp_pgp",        # PGP key lookup — confirms real identity
-        "sfp_hunter",     # email format / domain intel
+        "sfp_hibp",  # breach cross-check
+        "sfp_emailrep",  # email reputation + risk score
+        "sfp_gravatar",  # profile photo, display name, linked accounts
+        "sfp_pgp",  # PGP key lookup — confirms real identity
+        "sfp_hunter",  # email format / domain intel
     ]
 
 
@@ -27,11 +28,18 @@ class SpiderfootElement(BaseModel):
     data: str
     type: str
 
+    @field_validator("module", "source", "data", "type", "date_found", mode="before")
+    @classmethod
+    def coerce_to_str(cls, v: object) -> str:
+        """SpiderFoot partial results sometimes return int fields (e.g. module=100).
+        Coerce everything to string so validation never fails on numeric values."""
+        return str(v) if v is not None else ""
+
 
 class SpiderfootOutput(BaseModel):
     scan_id: str
     target: str
-    status: Literal["FINISHED", "FAILED", "RUNNING", "ABORTED"]
+    status: Literal["FINISHED", "FAILED", "RUNNING", "ABORTED", "PARTIAL"]
     element_count: int
     elements: list[SpiderfootElement]
     duration_seconds: int

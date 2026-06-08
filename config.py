@@ -1,5 +1,6 @@
 import os
 import sys
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -17,6 +18,8 @@ OPTIONAL_VARS_WITH_DEFAULTS = {
     "TEST_MODE": "false",
     "RESULTS_OUTPUT_PATH": "output/",
     "LEAKRADAR_API_KEY": "",
+    "SHODAN_API_KEY": "",
+    "EXODUS_API_TOKEN": "",  # free token at reports.exodus-privacy.eu.org/en/api/
 }
 
 

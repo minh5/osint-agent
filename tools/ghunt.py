@@ -12,7 +12,9 @@ from models.shared import ToolResult
 
 logger = logging.getLogger(__name__)
 
-FIXTURE_PATH = Path(__file__).parent.parent / "tests" / "fixtures" / "ghunt_response.json"
+FIXTURE_PATH = (
+    Path(__file__).parent.parent / "tests" / "fixtures" / "ghunt_response.json"
+)
 CREDS_PATH = Path.home() / ".malfrats" / "ghunt" / "creds.m"
 
 
@@ -28,19 +30,28 @@ def run(inp: GHuntInput) -> ToolResult:
         return _load_fixture()
 
     if not CREDS_PATH.exists():
-        logger.warning("ghunt: no credentials found at %s — run 'ghunt login' to enable", CREDS_PATH)
+        logger.warning(
+            "ghunt: no credentials found at %s — run 'ghunt login' to enable",
+            CREDS_PATH,
+        )
         output = GHuntOutput(email=inp.email, found=False)
         return ToolResult(
-            success=True, tool="ghunt", input_type="email", input_value=inp.email,
-            timestamp=datetime.now(timezone.utc), data=output.model_dump(),
+            success=True,
+            tool="ghunt",
+            input_type="email",
+            input_value=inp.email,
+            timestamp=datetime.now(timezone.utc),
+            data=output.model_dump(),
         )
 
     try:
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
             out_path = f.name
 
+        # ghunt has no __main__, must be called via its installed CLI entrypoint
+        ghunt_bin = Path(sys.executable).parent / "ghunt"
         result = subprocess.run(
-            [sys.executable, "-m", "ghunt", "email", "--json", out_path, inp.email],
+            [str(ghunt_bin), "email", "--json", out_path, inp.email],
             capture_output=True,
             text=True,
             timeout=60,
@@ -54,36 +65,70 @@ def run(inp: GHuntInput) -> ToolResult:
                 try:
                     raw = json.loads(content)
                 except json.JSONDecodeError:
-                    logger.warning("ghunt: output file was not valid JSON — treating as no results")
+                    logger.warning(
+                        "ghunt: output file was not valid JSON — treating as no results"
+                    )
 
         if not raw or result.returncode != 0:
             if result.stderr:
-                logger.warning("ghunt: stderr: %s", result.stderr[:300])
-            logger.info("ghunt: no results for %s", inp.email)
+                logger.warning("ghunt: stderr:\n%s", result.stderr[:2000])
+            if result.stdout:
+                logger.warning("ghunt: stdout:\n%s", result.stdout[:500])
+            logger.info(
+                "ghunt: no results for %s (returncode=%s)", inp.email, result.returncode
+            )
             output = GHuntOutput(email=inp.email, found=False)
         else:
             profile = raw.get("profile", raw)
             output = GHuntOutput(
                 email=inp.email,
                 found=True,
-                name=profile.get("name", {}).get("fullname", "") if isinstance(profile.get("name"), dict) else str(profile.get("name", "")),
-                profile_photo_url=profile.get("profile_photos", [{}])[0].get("url", "") if profile.get("profile_photos") else "",
-                google_services=list(profile.get("activated_services", {}).keys()) if isinstance(profile.get("activated_services"), dict) else [],
-                maps_reviews_count=profile.get("maps", {}).get("reviews_count", 0) if isinstance(profile.get("maps"), dict) else 0,
-                youtube_channel=profile.get("youtube", {}).get("channel_url", "") if isinstance(profile.get("youtube"), dict) else "",
+                name=(
+                    profile.get("name", {}).get("fullname", "")
+                    if isinstance(profile.get("name"), dict)
+                    else str(profile.get("name", ""))
+                ),
+                profile_photo_url=(
+                    profile.get("profile_photos", [{}])[0].get("url", "")
+                    if profile.get("profile_photos")
+                    else ""
+                ),
+                google_services=(
+                    list(profile.get("activated_services", {}).keys())
+                    if isinstance(profile.get("activated_services"), dict)
+                    else []
+                ),
+                maps_reviews_count=(
+                    profile.get("maps", {}).get("reviews_count", 0)
+                    if isinstance(profile.get("maps"), dict)
+                    else 0
+                ),
+                youtube_channel=(
+                    profile.get("youtube", {}).get("channel_url", "")
+                    if isinstance(profile.get("youtube"), dict)
+                    else ""
+                ),
                 raw=raw,
             )
 
         logger.info("ghunt: found=%s services=%s", output.found, output.google_services)
         return ToolResult(
-            success=True, tool="ghunt", input_type="email", input_value=inp.email,
-            timestamp=datetime.now(timezone.utc), data=output.model_dump(),
+            success=True,
+            tool="ghunt",
+            input_type="email",
+            input_value=inp.email,
+            timestamp=datetime.now(timezone.utc),
+            data=output.model_dump(),
         )
 
     except Exception as exc:
         logger.error("ghunt: FAILED — %s", exc, exc_info=True)
         return ToolResult(
-            success=False, tool="ghunt", input_type="email", input_value=inp.email,
-            timestamp=datetime.now(timezone.utc), data={},
+            success=False,
+            tool="ghunt",
+            input_type="email",
+            input_value=inp.email,
+            timestamp=datetime.now(timezone.utc),
+            data={},
             error=f"ghunt error: {exc}",
         )

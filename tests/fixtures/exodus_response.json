@@ -1,0 +1,70 @@
+{
+  "success": true,
+  "tool": "exodus",
+  "input_type": "name",
+  "input_value": "Spotify, Duolingo, Adobe",
+  "timestamp": "2026-01-01T00:00:00Z",
+  "data": {
+    "apps_checked": 3,
+    "apps_with_trackers": 2,
+    "results": [
+      {
+        "platform": "Spotify",
+        "package": "com.spotify.music",
+        "trackers": [
+          {
+            "name": "Adjust",
+            "categories": ["Analytics", "Advertising"],
+            "website": "https://www.adjust.com"
+          },
+          {
+            "name": "Facebook Audience Network",
+            "categories": ["Advertising", "Profiling"],
+            "website": "https://developers.facebook.com/docs/audience-network"
+          },
+          {
+            "name": "Google Firebase Analytics",
+            "categories": ["Analytics", "Crash reporting"],
+            "website": "https://firebase.google.com"
+          }
+        ],
+        "tracker_count": 3,
+        "high_risk_trackers": ["Adjust", "Facebook Audience Network"]
+      },
+      {
+        "platform": "Duolingo",
+        "package": "com.duolingo",
+        "trackers": [
+          {
+            "name": "Amplitude",
+            "categories": ["Analytics", "Profiling"],
+            "website": "https://amplitude.com"
+          },
+          {
+            "name": "AppsFlyer",
+            "categories": ["Analytics", "Advertising"],
+            "website": "https://www.appsflyer.com"
+          }
+        ],
+        "tracker_count": 2,
+        "high_risk_trackers": ["Amplitude", "AppsFlyer"]
+      },
+      {
+        "platform": "Adobe",
+        "package": "com.adobe.reader",
+        "trackers": [],
+        "tracker_count": 0,
+        "high_risk_trackers": []
+      }
+    ],
+    "all_trackers_found": [
+      "Adjust",
+      "Amplitude",
+      "AppsFlyer",
+      "Facebook Audience Network",
+      "Google Firebase Analytics"
+    ],
+    "high_risk_count": 4
+  },
+  "error": null
+}

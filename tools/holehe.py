@@ -2,17 +2,20 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import httpx
 import trio
 
 import config
-from models.holehe import HoleheInput, HoleheOutput, HoleheMatch
+from models.holehe import HoleheInput, HoleheMatch, HoleheOutput
 from models.shared import ToolResult
 
 logger = logging.getLogger(__name__)
 
-FIXTURE_PATH = Path(__file__).parent.parent / "tests" / "fixtures" / "holehe_response.json"
+FIXTURE_PATH = (
+    Path(__file__).parent.parent / "tests" / "fixtures" / "holehe_response.json"
+)
 
 
 def _load_fixture() -> ToolResult:
@@ -69,8 +72,8 @@ def run(inp: HoleheInput) -> ToolResult:
 
 
 async def _run_async(email: str) -> list[dict]:
-    from holehe.core import import_submodules, get_functions
     import holehe.modules
+    from holehe.core import get_functions, import_submodules
 
     modules = import_submodules(holehe.modules)
     functions = get_functions(modules)
@@ -84,7 +87,9 @@ async def _run_async(email: str) -> list[dict]:
     return out
 
 
-async def _check_one(func, email: str, client: httpx.AsyncClient, out: list) -> None:
+async def _check_one(
+    func: Any, email: str, client: httpx.AsyncClient, out: list
+) -> None:
     try:
         await func(email, client, out)
     except Exception:

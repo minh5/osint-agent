@@ -7,12 +7,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import config
-from models.sherlock import SherlockInput, SherlockOutput, SherlockProfile
 from models.shared import ToolResult
+from models.sherlock import SherlockInput, SherlockOutput, SherlockProfile
 
 logger = logging.getLogger(__name__)
 
-FIXTURE_PATH = Path(__file__).parent.parent / "tests" / "fixtures" / "sherlock_response.json"
+FIXTURE_PATH = (
+    Path(__file__).parent.parent / "tests" / "fixtures" / "sherlock_response.json"
+)
 FOUND_RE = re.compile(r"^\[\+\]\s+(.+?):\s+(https?://\S+)", re.MULTILINE)
 CHECKED_RE = re.compile(r"(\d+)\s+sites?", re.IGNORECASE)
 
@@ -30,7 +32,15 @@ def run(inp: SherlockInput) -> ToolResult:
 
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "sherlock_project", "--print-found", "--no-color", "--no-txt", inp.username],
+            [
+                sys.executable,
+                "-m",
+                "sherlock_project",
+                "--print-found",
+                "--no-color",
+                "--no-txt",
+                inp.username,
+            ],
             capture_output=True,
             text=True,
             timeout=180,
@@ -51,16 +61,28 @@ def run(inp: SherlockInput) -> ToolResult:
             profiles_found=profiles,
             found_count=len(profiles),
         )
-        logger.info("sherlock: checked %d platforms, found %d profiles", platforms_checked, len(profiles))
+        logger.info(
+            "sherlock: checked %d platforms, found %d profiles",
+            platforms_checked,
+            len(profiles),
+        )
         return ToolResult(
-            success=True, tool="sherlock", input_type="name", input_value=inp.username,
-            timestamp=datetime.now(timezone.utc), data=output.model_dump(),
+            success=True,
+            tool="sherlock",
+            input_type="name",
+            input_value=inp.username,
+            timestamp=datetime.now(timezone.utc),
+            data=output.model_dump(),
         )
 
     except Exception as exc:
         logger.error("sherlock: FAILED — %s", exc, exc_info=True)
         return ToolResult(
-            success=False, tool="sherlock", input_type="name", input_value=inp.username,
-            timestamp=datetime.now(timezone.utc), data={},
+            success=False,
+            tool="sherlock",
+            input_type="name",
+            input_value=inp.username,
+            timestamp=datetime.now(timezone.utc),
+            data={},
             error=f"sherlock error: {exc}",
         )

@@ -1,4 +1,5 @@
 import os
+
 import pytest
 
 os.environ.setdefault("TEST_MODE", "true")
@@ -15,7 +16,9 @@ from models.shared import InputClassification
 
 class TestInputClassificationModel:
     def test_email_type(self):
-        c = InputClassification(type="email", value="test@example.com", raw="test@example.com")
+        c = InputClassification(
+            type="email", value="test@example.com", raw="test@example.com"
+        )
         assert c.type == "email"
 
     def test_phone_type(self):
@@ -44,6 +47,7 @@ class TestInputNormalization:
 
     def test_phone_pattern(self):
         import re
+
         phone_re = re.compile(r"[\d\s\-\(\)\+]{7,}")
         assert phone_re.search("555-123-4567")
         assert phone_re.search("+1 (555) 123-4567")

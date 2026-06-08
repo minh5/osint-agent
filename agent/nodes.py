@@ -1,22 +1,23 @@
 import json
 import logging
-import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal, cast
 
 import config
-from models.shared import PipelineState, InputClassification, ToolResult, AnalysisResult
-from models.hibp import HibpInput
-from models.spiderfoot import SpiderfootInput
-from models.broker_scan import BrokerScanInput
-from models.ai_audit import AiAuditInput
-from models.holehe import HoleheInput
-from models.leakradar import LeakRadarInput
-from models.blackbird import BlackbirdInput
-from models.maigret import MaigretInput
-from models.ghunt import GHuntInput
 from agent.prompts import ANALYSIS_PROMPT
+from models.ai_audit import AiAuditInput
+from models.blackbird import BlackbirdInput
+from models.broker_scan import BrokerScanInput, BrokerScanOutput
+from models.exodus import ExodusInput
+from models.ghunt import GHuntInput
+from models.hibp import HibpInput
+from models.holehe import HoleheInput
+from models.maigret import MaigretInput
+from models.shared import AnalysisResult, InputClassification, PipelineState, ToolResult
+from models.shodan import ShodanInput
+from models.spiderfoot import SpiderfootInput
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +48,44 @@ def _classify_input(raw: str) -> InputClassification:
 
 def intake_node(state: PipelineState) -> PipelineState:
     logger.info("intake_node: classifying inputs")
-    lines = [line.strip() for line in state.raw_input.splitlines() if line.strip()]
-    classifications = [_classify_input(line) for line in lines]
-    return state.model_copy(update={"classifications": classifications})
+    classifications = []
+    location: dict = {}
+    for line in state.raw_input.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        # Structured format from main.py argparse: "type:value"
+        if line.startswith(("email:", "phone:", "name:")):
+            kind, _, value = line.partition(":")
+            type_map: dict[str, Literal["email", "phone", "name", "org"]] = {
+                "email": "email",
+                "phone": "phone",
+                "name": "name",
+            }
+            classifications.append(
+                InputClassification(
+                    type=type_map[kind], value=value.strip(), raw=value.strip()
+                )
+            )
+        elif line.startswith(("city:", "state:", "zip:")):
+            kind, _, value = line.partition(":")
+            location[kind] = value.strip()
+            logger.info("  location: %s=%s", kind, value.strip())
+        else:
+            # Fallback: regex-based classification for bare strings
+            classifications.append(_classify_input(line))
+
+    for c in classifications:
+        logger.info("  classified: type=%s value=%s", c.type, c.value)
+
+    updates: dict = {"classifications": classifications}
+    if location.get("city"):
+        updates["location_city"] = location["city"]
+    if location.get("state"):
+        updates["location_state"] = location["state"]
+    if location.get("zip"):
+        updates["location_zip"] = location["zip"]
+    return state.model_copy(update=updates)
 
 
 def breach_check_node(state: PipelineState) -> PipelineState:
@@ -66,26 +102,98 @@ def breach_check_node(state: PipelineState) -> PipelineState:
     inp = HibpInput(input_type=primary.type, value=primary.value)
     result = hibp_tool.run(inp)
     if result.success:
-        logger.info("breach_check_node: OK — breach_count=%s", result.data.get("breach_count", 0))
+        logger.info(
+            "breach_check_node: OK — breach_count=%s",
+            result.data.get("breach_count", 0),
+        )
     else:
         logger.error("breach_check_node: FAILED — %s", result.error)
     return state.model_copy(update={"hibp_result": result})
 
 
+def _resolve_name(state: PipelineState) -> str | None:
+    """Find the best available name for broker search.
+
+    Priority:
+    1. Explicit --name input from the user
+    2. GHunt display name (most reliable — pulled from Google account)
+    3. SpiderFoot human_name elements
+    Returns None if no name found anywhere.
+    """
+    # 1. Explicit name from intake
+    name_classification = next(
+        (c for c in state.classifications if c.type == "name"), None
+    )
+    if name_classification:
+        return name_classification.value
+
+    # 2. GHunt display name
+    if state.ghunt_result and state.ghunt_result.success:
+        ghunt_name = state.ghunt_result.data.get("name", "")
+        if ghunt_name:
+            logger.info("broker_scan_node: using GHunt name: %s", ghunt_name)
+            return ghunt_name
+
+    # 3. SpiderFoot HUMAN_NAME elements
+    if state.spiderfoot_result and state.spiderfoot_result.success:
+        elements = state.spiderfoot_result.data.get("elements", [])
+        for el in elements:
+            if el.get("type") == "HUMAN_NAME" and el.get("data"):
+                name = el["data"].strip()
+                if name:
+                    logger.info("broker_scan_node: using SpiderFoot name: %s", name)
+                    return name
+
+    return None
+
+
 def broker_scan_node(state: PipelineState) -> PipelineState:
     from tools import broker_scan as broker_tool
 
-    primary = state.classifications[0] if state.classifications else None
-    if not primary:
-        logger.info("broker_scan_node: no input classifications, skipping")
-        return state
+    name = _resolve_name(state)
 
-    inp = BrokerScanInput(input_type=primary.type, value=primary.value)
+    if not name:
+        logger.info(
+            "broker_scan_node: no name available from input or prior tools — skipping"
+        )
+        output = BrokerScanOutput(
+            query_value="",
+            brokers_found_count=0,
+            brokers_found=[],
+            exposure_score=0,
+            priority_optouts=[],
+        )
+        result = ToolResult(
+            success=True,
+            tool="broker_scan",
+            input_type="name",
+            input_value="",
+            timestamp=datetime.now(timezone.utc),
+            data=output.model_dump(),
+        )
+        return state.model_copy(update={"broker_result": result})
+
+    logger.info(
+        "broker_scan_node: searching brokers for name=%s city=%s state=%s zip=%s",
+        name,
+        state.location_city,
+        state.location_state,
+        state.location_zip,
+    )
+    inp = BrokerScanInput(
+        input_type="name",
+        value=name,
+        city=state.location_city,
+        state=state.location_state,
+        zip_code=state.location_zip,
+    )
     result = broker_tool.run(inp)
     if result.success:
-        logger.info("broker_scan_node: OK — brokers_found=%s exposure_score=%s",
-                    result.data.get("brokers_found_count", 0),
-                    result.data.get("exposure_score", 0))
+        logger.info(
+            "broker_scan_node: OK — brokers_found=%s exposure_score=%s",
+            result.data.get("brokers_found_count", 0),
+            result.data.get("exposure_score", 0),
+        )
     else:
         logger.error("broker_scan_node: FAILED — %s", result.error)
     return state.model_copy(update={"broker_result": result})
@@ -99,11 +207,16 @@ def surface_map_node(state: PipelineState) -> PipelineState:
         logger.info("surface_map_node: no input, skipping SpiderFoot")
         return state
 
-    target_type = SPIDERFOOT_TARGET_TYPE.get(primary.type, "human_name")
+    target_type = cast(
+        Literal["emailaddr", "phone", "human_name", "company_name"],
+        SPIDERFOOT_TARGET_TYPE.get(primary.type, "human_name"),
+    )
     inp = SpiderfootInput(target=primary.value, target_type=target_type)
     result = sf_tool.run(inp)
     if result.success:
-        logger.info("surface_map_node: OK — elements=%s", result.data.get("element_count", 0))
+        logger.info(
+            "surface_map_node: OK — elements=%s", result.data.get("element_count", 0)
+        )
     else:
         logger.error("surface_map_node: FAILED — %s", result.error)
     return state.model_copy(update={"spiderfoot_result": result})
@@ -123,32 +236,14 @@ def holehe_node(state: PipelineState) -> PipelineState:
     inp = HoleheInput(email=primary.value)
     result = holehe_tool.run(inp)
     if result.success:
-        logger.info("holehe_node: OK — found=%s checked=%s",
-                    result.data.get("found_count", 0),
-                    result.data.get("platforms_checked", 0))
+        logger.info(
+            "holehe_node: OK — found=%s checked=%s",
+            result.data.get("found_count", 0),
+            result.data.get("platforms_checked", 0),
+        )
     else:
         logger.error("holehe_node: FAILED — %s", result.error)
     return state.model_copy(update={"holehe_result": result})
-
-
-def leakradar_node(state: PipelineState) -> PipelineState:
-    from tools import leakradar as leakradar_tool
-
-    primary = next(
-        (c for c in state.classifications if c.type == "email"),
-        None,
-    )
-    if not primary:
-        logger.info("leakradar_node: no email input, skipping")
-        return state
-
-    inp = LeakRadarInput(email=primary.value)
-    result = leakradar_tool.run(inp)
-    if result.success:
-        logger.info("leakradar_node: OK — total_results=%s", result.data.get("total_results", 0))
-    else:
-        logger.error("leakradar_node: FAILED — %s", result.error)
-    return state.model_copy(update={"leakradar_result": result})
 
 
 def blackbird_node(state: PipelineState) -> PipelineState:
@@ -187,9 +282,11 @@ def maigret_node(state: PipelineState) -> PipelineState:
     inp = MaigretInput(username=username)
     result = maigret_tool.run(inp)
     if result.success:
-        logger.info("maigret_node: OK — found=%s checked=%s",
-                    result.data.get("found_count", 0),
-                    result.data.get("platforms_checked", 0))
+        logger.info(
+            "maigret_node: OK — found=%s checked=%s",
+            result.data.get("found_count", 0),
+            result.data.get("platforms_checked", 0),
+        )
     else:
         logger.error("maigret_node: FAILED — %s", result.error)
     return state.model_copy(update={"sherlock_result": result})
@@ -206,12 +303,118 @@ def ghunt_node(state: PipelineState) -> PipelineState:
     inp = GHuntInput(email=primary.value)
     result = ghunt_tool.run(inp)
     if result.success:
-        logger.info("ghunt_node: OK — found=%s services=%s",
-                    result.data.get("found", False),
-                    result.data.get("google_services", []))
+        logger.info(
+            "ghunt_node: OK — found=%s services=%s",
+            result.data.get("found", False),
+            result.data.get("google_services", []),
+        )
     else:
         logger.error("ghunt_node: FAILED — %s", result.error)
     return state.model_copy(update={"ghunt_result": result})
+
+
+def shodan_node(state: PipelineState) -> PipelineState:
+    from models.shodan import ShodanOutput
+    from tools import shodan as shodan_tool
+
+    if not state.spiderfoot_result or not state.spiderfoot_result.success:
+        logger.info("shodan_node: no spiderfoot_result, skipping")
+        return state
+
+    elements = state.spiderfoot_result.data.get("elements", [])
+    ips = [
+        el["data"]
+        for el in elements
+        if el.get("type") == "IP_ADDRESS" and el.get("data")
+    ][
+        :5
+    ]  # cap at 5 IPs
+
+    if not ips:
+        logger.info(
+            "shodan_node: no IP_ADDRESS elements in spiderfoot_result, skipping"
+        )
+        return state
+
+    logger.info("shodan_node: scanning %d IPs: %s", len(ips), ips)
+
+    all_hosts = []
+    for ip in ips:
+        inp = ShodanInput(ip=ip)
+        result = shodan_tool.run(inp)
+        if result.success:
+            all_hosts.extend(result.data.get("hosts", []))
+        else:
+            logger.warning("shodan_node: failed for ip=%s — %s", ip, result.error)
+
+    total_open_ports = sum(len(h.get("ports", [])) for h in all_hosts)
+    total_vulns = sum(len(h.get("vulns", [])) for h in all_hosts)
+    high_risk_ips = [h["ip"] for h in all_hosts if h.get("vulns")]
+
+    output = ShodanOutput(
+        ips_checked=len(ips),
+        hosts=[],
+        total_open_ports=total_open_ports,
+        total_vulns=total_vulns,
+        high_risk_ips=high_risk_ips,
+    )
+    aggregated_data = output.model_dump()
+    aggregated_data["hosts"] = all_hosts
+
+    primary = state.classifications[0] if state.classifications else None
+    aggregated = ToolResult(
+        success=True,
+        tool="shodan",
+        input_type=primary.type if primary else "org",
+        input_value=primary.value if primary else "",
+        timestamp=datetime.now(timezone.utc),
+        data=aggregated_data,
+    )
+
+    logger.info(
+        "shodan_node: OK — ips_checked=%d open_ports=%d vulns=%d",
+        len(ips),
+        total_open_ports,
+        total_vulns,
+    )
+    return state.model_copy(update={"shodan_result": aggregated})
+
+
+def exodus_node(state: PipelineState) -> PipelineState:
+    from tools import exodus as exodus_tool
+
+    platforms: list[str] = []
+
+    if state.holehe_result and state.holehe_result.success:
+        for match in state.holehe_result.data.get("platforms_found", []):
+            name = match.get("platform", "")
+            if name:
+                platforms.append(name)
+
+    if state.blackbird_result and state.blackbird_result.success:
+        for account in state.blackbird_result.data.get("accounts_found", []):
+            name = account.get("platform", "")
+            if name and name not in platforms:
+                platforms.append(name)
+
+    if not platforms:
+        logger.info(
+            "exodus_node: no platforms found in holehe/blackbird results, skipping"
+        )
+        return state
+
+    logger.info("exodus_node: checking %d platforms for tracker SDKs", len(platforms))
+    inp = ExodusInput(platforms=platforms)
+    result = exodus_tool.run(inp)
+    if result.success:
+        logger.info(
+            "exodus_node: OK — apps_checked=%s high_risk_count=%s",
+            result.data.get("apps_checked", 0),
+            result.data.get("high_risk_count", 0),
+        )
+    else:
+        logger.error("exodus_node: FAILED — %s", result.error)
+    return state.model_copy(update={"exodus_result": result})
 
 
 def ai_audit_node(state: PipelineState) -> PipelineState:
@@ -245,9 +448,11 @@ def ai_audit_node(state: PipelineState) -> PipelineState:
     inp = AiAuditInput(platforms=sorted(platforms))
     result = audit_tool.run(inp)
     if result.success:
-        logger.info("ai_audit_node: OK — high_risk=%s overall=%s",
-                    result.data.get("high_risk_count", 0),
-                    result.data.get("overall_risk", "?"))
+        logger.info(
+            "ai_audit_node: OK — high_risk=%s overall=%s",
+            result.data.get("high_risk_count", 0),
+            result.data.get("overall_risk", "?"),
+        )
     else:
         logger.error("ai_audit_node: FAILED — %s", result.error)
     return state.model_copy(update={"ai_audit_result": result})
@@ -273,10 +478,12 @@ def _build_analysis_digest(state: PipelineState) -> str:
     if state.hibp_result and state.hibp_result.success:
         d = state.hibp_result.data
         lines.append(f"HIBP BREACHES: {d.get('breach_count', 0)} total")
-        for b in (d.get("breaches") or []):
+        for b in d.get("breaches") or []:
             name = b.get("name", "?")
             year = str(b.get("breach_date", ""))[:4]
-            classes = ", ".join((b.get("data_classes") or [])[:6]) or "unknown data types"
+            classes = (
+                ", ".join((b.get("data_classes") or [])[:6]) or "unknown data types"
+            )
             spam = " [spam list]" if b.get("is_spam_list") else ""
             lines.append(f"  - {name} ({year}): {classes}{spam}")
         lines.append("")
@@ -285,7 +492,9 @@ def _build_analysis_digest(state: PipelineState) -> str:
     if state.holehe_result and state.holehe_result.success:
         d = state.holehe_result.data
         found = [p.get("platform") for p in (d.get("platforms_found") or [])]
-        lines.append(f"HOLEHE: {d.get('found_count', 0)} registrations found across {d.get('platforms_checked', 0)} platforms")
+        lines.append(
+            f"HOLEHE: {d.get('found_count', 0)} registrations found across {d.get('platforms_checked', 0)} platforms"
+        )
         if found:
             lines.append(f"  Platforms: {', '.join(found[:20])}")
         lines.append("")
@@ -293,7 +502,9 @@ def _build_analysis_digest(state: PipelineState) -> str:
     # ── Blackbird accounts ────────────────────────────────────────────────────
     if state.blackbird_result and state.blackbird_result.success:
         d = state.blackbird_result.data
-        accts = [(a.get("platform"), a.get("url")) for a in (d.get("accounts_found") or [])]
+        accts = [
+            (a.get("platform"), a.get("url")) for a in (d.get("accounts_found") or [])
+        ]
         lines.append(f"BLACKBIRD: {d.get('found_count', 0)} accounts found")
         for platform, url in accts[:15]:
             lines.append(f"  - {platform}: {url}")
@@ -302,8 +513,12 @@ def _build_analysis_digest(state: PipelineState) -> str:
     # ── Maigret username profiles ─────────────────────────────────────────────
     if state.sherlock_result and state.sherlock_result.success:
         d = state.sherlock_result.data
-        profiles = [(p.get("platform"), p.get("url")) for p in (d.get("profiles_found") or [])]
-        lines.append(f"MAIGRET: {d.get('found_count', 0)} profiles across {d.get('platforms_checked', 0)} platforms")
+        profiles = [
+            (p.get("platform"), p.get("url")) for p in (d.get("profiles_found") or [])
+        ]
+        lines.append(
+            f"MAIGRET: {d.get('found_count', 0)} profiles across {d.get('platforms_checked', 0)} platforms"
+        )
         for platform, url in profiles[:20]:
             lines.append(f"  - {platform}: {url}")
         lines.append("")
@@ -312,7 +527,7 @@ def _build_analysis_digest(state: PipelineState) -> str:
     if state.ghunt_result and state.ghunt_result.success:
         d = state.ghunt_result.data
         if d.get("found"):
-            lines.append(f"GHUNT: Google account found")
+            lines.append("GHUNT: Google account found")
             lines.append(f"  Name: {d.get('name', 'unknown')}")
             lines.append(f"  Services: {', '.join(d.get('google_services', []))}")
         else:
@@ -322,17 +537,13 @@ def _build_analysis_digest(state: PipelineState) -> str:
     # ── Broker scan ───────────────────────────────────────────────────────────
     if state.broker_result and state.broker_result.success:
         d = state.broker_result.data
-        lines.append(f"DATA BROKERS: {d.get('brokers_found_count', 0)} brokers, exposure score {d.get('exposure_score', 0)}/100")
+        lines.append(
+            f"DATA BROKERS: {d.get('brokers_found_count', 0)} brokers, exposure score {d.get('exposure_score', 0)}/100"
+        )
         for b in (d.get("brokers_found") or [])[:8]:
-            lines.append(f"  - {b.get('broker_name')}: {b.get('data_types_exposed', [])}")
-        lines.append("")
-
-    # ── LeakRadar ─────────────────────────────────────────────────────────────
-    if state.leakradar_result and state.leakradar_result.success:
-        d = state.leakradar_result.data
-        lines.append(f"LEAKRADAR: {d.get('total_results', 0)} leak results")
-        for src in (d.get("sources") or [])[:8]:
-            lines.append(f"  - {src}")
+            lines.append(
+                f"  - {b.get('broker_name')}: {b.get('data_types_exposed', [])}"
+            )
         lines.append("")
 
     # ── SpiderFoot ────────────────────────────────────────────────────────────
@@ -341,6 +552,7 @@ def _build_analysis_digest(state: PipelineState) -> str:
         elements = d.get("elements") or []
         # Group by type, show top 10 per type
         from collections import defaultdict
+
         by_type: dict = defaultdict(list)
         for el in elements:
             by_type[el.get("type", "UNKNOWN")].append(el.get("data", ""))
@@ -352,9 +564,49 @@ def _build_analysis_digest(state: PipelineState) -> str:
     # ── AI audit ─────────────────────────────────────────────────────────────
     if state.ai_audit_result and state.ai_audit_result.success:
         d = state.ai_audit_result.data
-        lines.append(f"AI PLATFORM EXPOSURE: {d.get('high_risk_count', 0)} high-risk, overall={d.get('overall_risk', 'unknown')}")
-        for p in (d.get("platforms_found") or []):
-            lines.append(f"  - {p.get('platform')}: risk={p.get('risk_level')} data_known={p.get('data_known', [])}")
+        lines.append(
+            f"AI PLATFORM EXPOSURE: {d.get('high_risk_count', 0)} high-risk, overall={d.get('overall_risk', 'unknown')}"
+        )
+        for p in d.get("platforms_found") or []:
+            lines.append(
+                f"  - {p.get('platform')}: risk={p.get('risk_level')} data_known={p.get('data_known', [])}"
+            )
+        lines.append("")
+
+    # ── Shodan infrastructure ─────────────────────────────────────────────────
+    if state.shodan_result and state.shodan_result.success:
+        d = state.shodan_result.data
+        lines.append(
+            f"SHODAN: {d.get('ips_checked', 0)} IPs checked, "
+            f"{d.get('total_open_ports', 0)} open ports, "
+            f"{d.get('total_vulns', 0)} CVEs"
+        )
+        for h in (d.get("hosts") or [])[:5]:
+            vulns = h.get("vulns", [])
+            ports = h.get("ports", [])
+            lines.append(f"  - {h['ip']}: ports={ports} vulns={vulns}")
+        lines.append("")
+
+    # ── Exodus tracker audit ──────────────────────────────────────────────────
+    if state.exodus_result and state.exodus_result.success:
+        d = state.exodus_result.data
+        lines.append(
+            f"EXODUS TRACKER AUDIT: {d.get('apps_checked', 0)} apps checked, "
+            f"{d.get('apps_with_trackers', 0)} with trackers, "
+            f"{d.get('high_risk_count', 0)} high-risk trackers"
+        )
+        for app in d.get("results") or []:
+            if app.get("tracker_count", 0) > 0:
+                high_risk = app.get("high_risk_trackers", [])
+                all_trackers = [
+                    t.get("name") if isinstance(t, dict) else t
+                    for t in app.get("trackers", [])
+                ]
+                hr_str = f" [HIGH RISK: {', '.join(high_risk)}]" if high_risk else ""
+                lines.append(
+                    f"  - {app['platform']} ({app['package']}): "
+                    f"{', '.join(all_trackers)}{hr_str}"
+                )
         lines.append("")
 
     return "\n".join(lines)
@@ -364,7 +616,12 @@ def analysis_node(state: PipelineState) -> PipelineState:
     logger.info("analysis_node: synthesizing results with Ollama")
 
     if config.is_test_mode():
-        fixture_path = Path(__file__).parent.parent / "tests" / "fixtures" / "analysis_response.json"
+        fixture_path = (
+            Path(__file__).parent.parent
+            / "tests"
+            / "fixtures"
+            / "analysis_response.json"
+        )
         analysis = json.loads(fixture_path.read_text())
         return state.model_copy(update={"analysis_result": analysis})
 
@@ -374,18 +631,23 @@ def analysis_node(state: PipelineState) -> PipelineState:
 
     try:
         from langchain_ollama import ChatOllama
-        llm = ChatOllama(
+
+        llm = ChatOllama(  # type: ignore[call-arg]
             model="llama3.1:8b",
             base_url=config.get("OLLAMA_HOST"),
             temperature=0,
-            timeout=300,  # 5 min hard cap
+            request_timeout=300,  # 5 min hard cap
         )
         messages = [
             ("system", ANALYSIS_PROMPT),
             ("human", digest),
         ]
         response = llm.invoke(messages)
-        raw_text = response.content
+        raw_text = (
+            response.content
+            if isinstance(response.content, str)
+            else str(response.content)
+        )
         logger.debug("analysis_node: raw response length=%d", len(raw_text))
 
         # Strip markdown code fences if the model wrapped the JSON
@@ -399,7 +661,14 @@ def analysis_node(state: PipelineState) -> PipelineState:
             raise json.JSONDecodeError("empty response from model", "", 0)
 
         analysis = json.loads(stripped)
-        AnalysisResult(**analysis)
+        # Validate schema but don't discard the result if fields are missing —
+        # the report uses analysis as a raw dict and handles missing keys with .get()
+        try:
+            AnalysisResult(**analysis)
+        except Exception as val_exc:
+            logger.warning(
+                "analysis_node: schema mismatch (continuing anyway): %s", val_exc
+            )
         return state.model_copy(update={"analysis_result": analysis})
 
     except json.JSONDecodeError as exc:
@@ -436,5 +705,6 @@ def analysis_node(state: PipelineState) -> PipelineState:
 
 def report_node(state: PipelineState) -> PipelineState:
     from agent.report import write_report
+
     report_path = write_report(state)
     return state.model_copy(update={"report_path": report_path})

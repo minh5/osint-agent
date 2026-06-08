@@ -1,6 +1,7 @@
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_pascal
-from typing import Literal
 
 
 class HibpInput(BaseModel):
