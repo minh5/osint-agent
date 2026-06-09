@@ -27,6 +27,8 @@ class PipelineState(BaseModel):
     location_state: str | None = None
     location_zip: str | None = None
     hibp_result: ToolResult | None = None
+    dehashed_result: ToolResult | None = None
+    whoxy_result: ToolResult | None = None
     broker_result: ToolResult | None = None
     spiderfoot_result: ToolResult | None = None
     holehe_result: ToolResult | None = None
@@ -35,7 +37,6 @@ class PipelineState(BaseModel):
     ghunt_result: ToolResult | None = None
     shodan_result: ToolResult | None = None
     ai_audit_result: ToolResult | None = None
-    exodus_result: ToolResult | None = None
     phone_result: ToolResult | None = None
     public_records_result: ToolResult | None = None
     correlation_plan: list[dict] = []

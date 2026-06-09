@@ -1,10 +1,24 @@
 import json
 import logging
+import re
+import uuid
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
 import config
 from models.shared import PipelineState
+
+
+def _rem_item(item) -> str:
+    """Normalize a remediation list item — LLM sometimes returns dicts instead of strings."""
+    if isinstance(item, dict):
+        service = item.get("service") or item.get("name") or ""
+        how = item.get("how_to_remove") or item.get("url") or ""
+        if how:
+            return f"{service}: {how}"
+        return service
+    return str(item)
 
 _BAZZELL_DB_PATH = Path(__file__).parent.parent / "data" / "bazzell_brokers.json"
 
@@ -41,7 +55,7 @@ def _risk_colour(level: str) -> tuple:
     return _GREEN
 
 
-def _write_pdf(pdf_path: Path, state: PipelineState, analysis: dict) -> None:
+def _write_pdf(pdf_path: Path, state: PipelineState, analysis: dict, run_id: str = "") -> None:
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_CENTER
     from reportlab.lib.pagesizes import A4
@@ -59,7 +73,7 @@ def _write_pdf(pdf_path: Path, state: PipelineState, analysis: dict) -> None:
 
     primary = state.classifications[0] if state.classifications else None
     target = primary.value if primary else "unknown"
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+    ts = datetime.now().strftime("%Y-%m-%d") + (f" · run {run_id}" if run_id else "")
     risk_lvl = (analysis.get("overall_risk_level") or "low").upper()
     risk_scr = analysis.get("overall_risk_score", 0)
     risk_col = colors.Color(*_risk_colour(risk_lvl))
@@ -152,7 +166,7 @@ def _write_pdf(pdf_path: Path, state: PipelineState, analysis: dict) -> None:
         return Paragraph(f"• &nbsp;{text}", S["bullet"])
 
     def checkbox(text):
-        return Paragraph(f"☐ &nbsp;{text}", S["check"])
+        return Paragraph(f"☐ &nbsp;{_rem_item(text)}", S["check"])
 
     def space(h=4):
         return Spacer(1, h * mm)
@@ -426,6 +440,24 @@ def _write_pdf(pdf_path: Path, state: PipelineState, analysis: dict) -> None:
 
     _tr("HIBP", state.hibp_result, lambda d: f"{d.get('breach_count',0)} breaches")
     _tr(
+        "DeHashed",
+        state.dehashed_result,
+        lambda d: (
+            f"{d.get('total',0)} records — "
+            f"{d.get('plaintext_password_count',0)} plaintext, "
+            f"{d.get('hashed_password_count',0)} hashed"
+        ),
+    )
+    _tr(
+        "Whoxy",
+        state.whoxy_result,
+        lambda d: (
+            f"{d.get('total_results',0)} domains — "
+            f"{d.get('active_domain_count',0)} active, "
+            f"{d.get('expired_domain_count',0)} expired"
+        ),
+    )
+    _tr(
         "Blackbird",
         state.blackbird_result,
         lambda d: f"{d.get('found_count',0)} accounts",
@@ -465,11 +497,7 @@ def _write_pdf(pdf_path: Path, state: PipelineState, analysis: dict) -> None:
         state.ai_audit_result,
         lambda d: f"{d.get('high_risk_count',0)} high-risk platforms",
     )
-    _tr(
-        "Exodus",
-        state.exodus_result,
-        lambda d: f"{d.get('apps_checked',0)} apps, {d.get('high_risk_count',0)} high-risk trackers",
-    )
+
     _tr(
         "Phone Lookup",
         state.phone_result,
@@ -538,18 +566,38 @@ def _write_pdf(pdf_path: Path, state: PipelineState, analysis: dict) -> None:
     doc.build(story)
 
 
+def _build_identifier(state: PipelineState) -> str:
+    """Pick the best identifier for the filename.
+
+    Priority: email > phone > name > org.
+    Sanitizes the value so it's safe as a filename component.
+    """
+    priority = ["email", "phone", "name", "org"]
+    classifications_by_type = {c.type: c for c in state.classifications}
+    for kind in priority:
+        if kind in classifications_by_type:
+            value = classifications_by_type[kind].value
+            # Sanitize: keep alphanumeric, dots, hyphens, underscores; replace the rest
+            safe = re.sub(r"[^\w.\-]", "_", value)
+            # Collapse multiple underscores and strip leading/trailing ones
+            safe = re.sub(r"_+", "_", safe).strip("_")
+            return safe
+    return "unknown"
+
+
 def write_report(state: PipelineState) -> str:
     output_dir = Path(config.get("RESULTS_OUTPUT_PATH"))
     output_dir.mkdir(parents=True, exist_ok=True)
 
     primary = state.classifications[0] if state.classifications else None
-    input_type = primary.type if primary else "unknown"
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
-    base_name = f"{timestamp}_{input_type}"
+    identifier = _build_identifier(state)
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    run_id = str(uuid.uuid4())[:8]   # short UUID — 8 hex chars is unambiguous enough
+    base_name = f"{identifier}_{date_str}_{run_id}"
 
-    json_path = output_dir / f"{base_name}_results.json"
-    md_path = output_dir / f"{base_name}_report.md"
-    pdf_path = output_dir / f"{base_name}_report.pdf"
+    json_path = output_dir / f"{base_name}.json"
+    md_path = output_dir / f"{base_name}.md"
+    pdf_path = output_dir / f"{base_name}.pdf"
 
     json_path.write_text(json.dumps(state.model_dump(), indent=2, default=str))
 
@@ -561,7 +609,7 @@ def write_report(state: PipelineState) -> str:
     lines = [
         "# Privacy OSINT Report",
         "",
-        f"**Generated:** {timestamp}",
+        f"**Generated:** {date_str} (run {run_id})",
         f"**Target:** {primary.value if primary else 'unknown'}",
         f"**Risk Score:** {analysis.get('overall_risk_score', 'N/A')}/100 — {analysis.get('overall_risk_level', 'N/A').upper()}",
         "",
@@ -685,7 +733,7 @@ def write_report(state: PipelineState) -> str:
         if items:
             lines += [f"### {title}", ""]
             for action in items:
-                lines.append(f"- [ ] {action}")
+                lines.append(f"- [ ] {_rem_item(action)}")
             lines.append("")
 
     # Bazzell cross-reference block
@@ -745,6 +793,22 @@ def write_report(state: PipelineState) -> str:
         lines.append(
             f"- **HIBP:** {state.hibp_result.data.get('breach_count',0)} breaches"
         )
+    if state.dehashed_result and state.dehashed_result.success:
+        d = state.dehashed_result.data
+        if d.get("total", 0):
+            lines.append(
+                f"- **DeHashed:** {d.get('total',0)} records — "
+                f"{d.get('plaintext_password_count',0)} plaintext, "
+                f"{d.get('hashed_password_count',0)} hashed passwords"
+            )
+    if state.whoxy_result and state.whoxy_result.success:
+        d = state.whoxy_result.data
+        if d.get("total_results", 0):
+            lines.append(
+                f"- **Whoxy:** {d.get('total_results',0)} domains registered — "
+                f"{d.get('active_domain_count',0)} active, "
+                f"{d.get('expired_domain_count',0)} expired"
+            )
     if state.blackbird_result and state.blackbird_result.success:
         lines.append(
             f"- **Blackbird:** {state.blackbird_result.data.get('found_count',0)} accounts found"
@@ -779,10 +843,12 @@ def write_report(state: PipelineState) -> str:
         and state.phone_result.data.get("valid")
     ):
         d = state.phone_result.data
-        carrier_name = (d.get("carrier") or {}).get("name", "unknown")
+        carrier_name = (d.get("carrier") or {}).get("name") or "unknown carrier"
+        location = d.get("geocode") or d.get("location") or d.get("country_code") or "unknown"
+        voip_tag = " ⚠ VoIP" if d.get("is_voip") else ""
         lines.append(
-            f"- **Phone:** {d.get('line_type','?')} via {carrier_name}, "
-            f"registered in {d.get('location','?')}, {d.get('country_code','')}"
+            f"- **Phone:** {d.get('line_type','?')}{voip_tag} via {carrier_name}, "
+            f"registered in {location}"
         )
     if state.public_records_result and state.public_records_result.success:
         d = state.public_records_result.data
@@ -851,7 +917,7 @@ def write_report(state: PipelineState) -> str:
 
     # ── PDF ───────────────────────────────────────────────────────────────────
     try:
-        _write_pdf(pdf_path, state, analysis)
+        _write_pdf(pdf_path, state, analysis, run_id=run_id)
         logger.info("PDF written to %s", pdf_path)
     except Exception as exc:
         logger.warning("PDF generation failed: %s", exc)

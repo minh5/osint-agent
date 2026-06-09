@@ -25,7 +25,11 @@ INPUT_TYPE_MAP = {
 }
 
 POLL_INTERVAL = 10
-POLL_TIMEOUT = 300  # 5 minutes — SpiderFoot rarely adds value past this point
+# Configurable via SPIDERFOOT_TIMEOUT env var (default 600s).
+# status="-" means SpiderFoot queued the scan but hasn't started yet —
+# this can take 60-120s before the first results appear, so 300s was
+# cutting off scans before they even ran. 600s gives a full run window.
+POLL_TIMEOUT = int(config.get("SPIDERFOOT_TIMEOUT") or 600)
 
 
 def _load_fixture() -> ToolResult:

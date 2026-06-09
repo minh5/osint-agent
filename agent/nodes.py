@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, cast
@@ -10,7 +11,7 @@ from agent.prompts import ANALYSIS_PROMPT, CORRELATION_PROMPT
 from models.ai_audit import AiAuditInput
 from models.blackbird import BlackbirdInput
 from models.broker_scan import BrokerScanInput, BrokerScanOutput
-from models.exodus import ExodusInput
+
 from models.ghunt import GHuntInput
 from models.hibp import HibpInput
 from models.holehe import HoleheInput
@@ -420,42 +421,6 @@ def shodan_node(state: PipelineState) -> PipelineState:
     return state.model_copy(update={"shodan_result": aggregated})
 
 
-def exodus_node(state: PipelineState) -> PipelineState:
-    from tools import exodus as exodus_tool
-
-    platforms: list[str] = []
-
-    if state.holehe_result and state.holehe_result.success:
-        for match in state.holehe_result.data.get("platforms_found", []):
-            name = match.get("platform", "")
-            if name:
-                platforms.append(name)
-
-    if state.blackbird_result and state.blackbird_result.success:
-        for account in state.blackbird_result.data.get("accounts_found", []):
-            name = account.get("platform", "")
-            if name and name not in platforms:
-                platforms.append(name)
-
-    if not platforms:
-        logger.info(
-            "exodus_node: no platforms found in holehe/blackbird results, skipping"
-        )
-        return state
-
-    logger.info("exodus_node: checking %d platforms for tracker SDKs", len(platforms))
-    inp = ExodusInput(platforms=platforms)
-    result = exodus_tool.run(inp)
-    if result.success:
-        logger.info(
-            "exodus_node: OK — apps_checked=%s high_risk_count=%s",
-            result.data.get("apps_checked", 0),
-            result.data.get("high_risk_count", 0),
-        )
-    else:
-        logger.error("exodus_node: FAILED — %s", result.error)
-    return state.model_copy(update={"exodus_result": result})
-
 
 def ai_audit_node(state: PipelineState) -> PipelineState:
     from tools import ai_audit as audit_tool
@@ -496,6 +461,73 @@ def ai_audit_node(state: PipelineState) -> PipelineState:
     else:
         logger.error("ai_audit_node: FAILED — %s", result.error)
     return state.model_copy(update={"ai_audit_result": result})
+
+
+def dehashed_node(state: PipelineState) -> PipelineState:
+    """Search DeHashed for breach records containing plaintext passwords,
+    hashed passwords, usernames, phone numbers, and physical addresses.
+
+    Complements HIBP: where HIBP shows breach metadata, DeHashed surfaces
+    the actual record contents — filling the physical data gap when broker
+    scanning returns nothing.
+
+    Skips gracefully if DEHASHED_EMAIL or DEHASHED_API_KEY are not set.
+    """
+    from tools import dehashed as dehashed_tool
+
+    primary = next(
+        (c for c in state.classifications if c.type == "email"),
+        None,
+    )
+    if not primary:
+        logger.info("dehashed_node: no email input, skipping")
+        return state
+
+    result = dehashed_tool.run(primary.value)
+    if result.success:
+        d = result.data
+        logger.info(
+            "dehashed_node: OK — total=%d plaintext=%d hashed=%d addresses=%d usernames=%d",
+            d.get("total", 0),
+            d.get("plaintext_password_count", 0),
+            d.get("hashed_password_count", 0),
+            len(d.get("unique_addresses") or []),
+            len(d.get("unique_usernames") or []),
+        )
+    else:
+        logger.error("dehashed_node: FAILED — %s", result.error)
+    return state.model_copy(update={"dehashed_result": result})
+
+
+def whoxy_node(state: PipelineState) -> PipelineState:
+    """Reverse WHOIS lookup — find all domains registered to this email.
+
+    Surfaces business activity, old projects, company names (pivot to
+    OpenCorporates), and physical addresses embedded in WHOIS registrant data.
+    Expired domains are flagged as a risk finding (impersonation risk).
+
+    Email inputs only. Skips gracefully if WHOXY_API_KEY is not set.
+    """
+    from tools import whoxy as whoxy_tool
+
+    primary = next((c for c in state.classifications if c.type == "email"), None)
+    if not primary:
+        logger.info("whoxy_node: no email input, skipping")
+        return state
+
+    result = whoxy_tool.run(primary.value)
+    if result.success:
+        d = result.data
+        logger.info(
+            "whoxy_node: OK — total=%d active=%d expired=%d companies=%d",
+            d.get("total_results", 0),
+            d.get("active_domain_count", 0),
+            d.get("expired_domain_count", 0),
+            len(d.get("unique_company_names") or []),
+        )
+    else:
+        logger.error("whoxy_node: FAILED — %s", result.error)
+    return state.model_copy(update={"whoxy_result": result})
 
 
 def phone_pivot_node(state: PipelineState) -> PipelineState:
@@ -582,6 +614,57 @@ def _build_analysis_digest(state: PipelineState) -> str:
             lines.append(f"  - {name} ({year}): {classes}{spam}")
         lines.append("")
 
+    # ── DeHashed breach records ───────────────────────────────────────────────
+    if state.dehashed_result and state.dehashed_result.success:
+        d = state.dehashed_result.data
+        total = d.get("total", 0)
+        if total:
+            lines.append(
+                f"DEHASHED: {total} breach records — "
+                f"{d.get('plaintext_password_count', 0)} plaintext passwords, "
+                f"{d.get('hashed_password_count', 0)} hashed passwords"
+            )
+            dbs = d.get("unique_databases") or []
+            if dbs:
+                lines.append(f"  Sources: {', '.join(dbs[:10])}")
+            usernames = d.get("unique_usernames") or []
+            if usernames:
+                lines.append(f"  Usernames exposed: {', '.join(usernames[:10])}")
+            addresses = d.get("unique_addresses") or []
+            if addresses:
+                lines.append(f"  Physical addresses: {', '.join(addresses[:5])}")
+            phones = d.get("unique_phones") or []
+            if phones:
+                lines.append(f"  Phones in breach data: {', '.join(phones[:5])}")
+            lines.append("")
+
+    # ── Whoxy reverse WHOIS ───────────────────────────────────────────────────
+    if state.whoxy_result and state.whoxy_result.success:
+        d = state.whoxy_result.data
+        total = d.get("total_results", 0)
+        if total:
+            active = d.get("active_domain_count", 0)
+            expired = d.get("expired_domain_count", 0)
+            lines.append(
+                f"WHOXY REVERSE WHOIS: {total} domains registered — "
+                f"{active} active, {expired} expired"
+            )
+            domains = d.get("domains") or []
+            for dom in domains[:10]:
+                expiry = dom.get("expiry_date", "")
+                status = "active" if expiry >= datetime.now(timezone.utc).date().isoformat() else "EXPIRED"
+                company = f" [{dom['registrant_company']}]" if dom.get("registrant_company") else ""
+                lines.append(f"  - {dom['domain_name']} ({status}, expires {expiry}){company}")
+            companies = d.get("unique_company_names") or []
+            if companies:
+                lines.append(f"  Company names in registrant data: {', '.join(companies[:5])}")
+            addresses = d.get("unique_addresses") or []
+            if addresses:
+                lines.append(f"  Physical addresses: {', '.join(addresses[:3])}")
+            if expired > 0:
+                lines.append(f"  ⚠ {expired} expired domain(s) — impersonation/typosquat risk")
+            lines.append("")
+
     # ── Holehe registrations ──────────────────────────────────────────────────
     if state.holehe_result and state.holehe_result.success:
         d = state.holehe_result.data
@@ -644,15 +727,23 @@ def _build_analysis_digest(state: PipelineState) -> str:
     if state.spiderfoot_result and state.spiderfoot_result.success:
         d = state.spiderfoot_result.data
         elements = d.get("elements") or []
-        # Group by type, show top 10 per type
-        from collections import defaultdict
-
         by_type: dict = defaultdict(list)
         for el in elements:
-            by_type[el.get("type", "UNKNOWN")].append(el.get("data", ""))
+            val = (el.get("data") or "").strip()
+            if val:
+                by_type[el.get("type", "UNKNOWN")].append(val)
+
+        # Exclude noisy/low-signal types that the LLM misreads as physical addresses
+        SKIP_TYPES = {"RAW_RIR_DATA", "GEOINFO", "COUNTRY_NAME", "PROVIDER_TELCO",
+                      "PHONE_PREFIX_OWNED", "NETBLOCK_OWNER", "BGP_AS_OWNER"}
         lines.append(f"SPIDERFOOT: {d.get('element_count', 0)} elements")
-        for etype, vals in list(by_type.items())[:8]:
-            lines.append(f"  {etype}: {', '.join(str(v) for v in vals[:5])}")
+        for etype, vals in list(by_type.items())[:10]:
+            if etype in SKIP_TYPES:
+                continue
+            # Skip values that are just short codes (e.g. "us", "md", "511")
+            clean = [v for v in vals if len(v) > 4]
+            if clean:
+                lines.append(f"  {etype}: {', '.join(clean[:5])}")
         lines.append("")
 
     # ── AI audit ─────────────────────────────────────────────────────────────
@@ -717,27 +808,6 @@ def _build_analysis_digest(state: PipelineState) -> str:
                 )
             lines.append("")
 
-    # ── Exodus tracker audit ──────────────────────────────────────────────────
-    if state.exodus_result and state.exodus_result.success:
-        d = state.exodus_result.data
-        lines.append(
-            f"EXODUS TRACKER AUDIT: {d.get('apps_checked', 0)} apps checked, "
-            f"{d.get('apps_with_trackers', 0)} with trackers, "
-            f"{d.get('high_risk_count', 0)} high-risk trackers"
-        )
-        for app in d.get("results") or []:
-            if app.get("tracker_count", 0) > 0:
-                high_risk = app.get("high_risk_trackers", [])
-                all_trackers = [
-                    t.get("name") if isinstance(t, dict) else t
-                    for t in app.get("trackers", [])
-                ]
-                hr_str = f" [HIGH RISK: {', '.join(high_risk)}]" if high_risk else ""
-                lines.append(
-                    f"  - {app['platform']} ({app['package']}): "
-                    f"{', '.join(all_trackers)}{hr_str}"
-                )
-        lines.append("")
 
     # ── Correlation follow-up results ─────────────────────────────────────────
     if state.correlation_results:
@@ -834,14 +904,16 @@ def wave1_scan_node(state: PipelineState) -> PipelineState:
     each other.  Running them in parallel reduces elapsed time from the sum of
     their runtimes to roughly the slowest single tool (usually SpiderFoot).
 
-    Wave 1: breach_check, phone_pivot, surface_map, holehe, blackbird,
-            maigret, ghunt
+    Wave 1: breach_check, dehashed, whoxy, phone_pivot, surface_map, holehe,
+            blackbird, maigret, ghunt
     """
-    logger.info("wave1_scan_node: starting 7 tools in parallel")
+    logger.info("wave1_scan_node: starting 9 tools in parallel")
     result = _run_concurrent(
         state,
         [
             breach_check_node,
+            dehashed_node,
+            whoxy_node,
             phone_pivot_node,
             surface_map_node,
             holehe_node,
@@ -860,13 +932,12 @@ def wave2_scan_node(state: PipelineState) -> PipelineState:
     These tools need at least one Wave 1 result (GHunt name, SpiderFoot IPs,
     Holehe/Blackbird platform lists) but are independent of each other.
 
-    Wave 2: exodus, broker_scan, shodan, public_records, ai_audit
+    Wave 2: broker_scan, shodan, public_records, ai_audit
     """
-    logger.info("wave2_scan_node: starting 5 tools in parallel")
+    logger.info("wave2_scan_node: starting 4 tools in parallel")
     result = _run_concurrent(
         state,
         [
-            exodus_node,
             broker_scan_node,
             shodan_node,
             public_records_node,

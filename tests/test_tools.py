@@ -9,6 +9,8 @@ os.environ.setdefault("APIFY_ACTOR_ID", "test")
 os.environ.setdefault("OLLAMA_HOST", "http://localhost:11434")
 os.environ.setdefault("SPIDERFOOT_HOST", "http://localhost:5001")
 
+import tools.dehashed as dehashed_tool
+import tools.whoxy as whoxy_tool
 import tools.ai_audit as ai_audit_tool
 import tools.blackbird as blackbird_tool
 import tools.broker_scan as broker_scan_tool
@@ -19,6 +21,8 @@ import tools.maigret as maigret_tool
 import tools.phone as phone_tool
 import tools.public_records as public_records_tool
 import tools.spiderfoot as spiderfoot_tool
+from models.dehashed import DehashedOutput
+from models.whoxy import WhoxyOutput
 from models.ai_audit import AiAuditInput, AiAuditOutput
 from models.blackbird import BlackbirdInput, BlackbirdOutput
 from models.broker_scan import BrokerScanInput, BrokerScanOutput
@@ -323,6 +327,81 @@ class TestPublicRecordsTool:
         assert rec.company_name != ""
         assert rec.role != ""
         assert rec.jurisdiction != ""
+
+
+class TestDehashedTool:
+    def test_returns_tool_result(self):
+        result = dehashed_tool.run("test@example.com")
+        assert isinstance(result, ToolResult)
+
+    def test_success_true_in_test_mode(self):
+        result = dehashed_tool.run("test@example.com")
+        assert result.success is True
+
+    def test_tool_name(self):
+        result = dehashed_tool.run("test@example.com")
+        assert result.tool == "dehashed"
+
+    def test_data_validates_as_output(self):
+        result = dehashed_tool.run("test@example.com")
+        output = DehashedOutput(**result.data)
+        assert output.total == 4
+        assert len(output.entries) == 4
+
+    def test_aggregated_counts(self):
+        result = dehashed_tool.run("test@example.com")
+        output = DehashedOutput(**result.data)
+        assert output.plaintext_password_count == 1
+        assert output.hashed_password_count == 2
+
+    def test_unique_fields(self):
+        result = dehashed_tool.run("test@example.com")
+        output = DehashedOutput(**result.data)
+        assert "testuser" in output.unique_usernames
+        assert len(output.unique_addresses) == 1
+        assert "+14155551234" in output.unique_phones
+        assert set(output.unique_databases) == {"LinkedIn", "Adobe", "EatStreet", "Apollo"}
+
+
+class TestWhoxyTool:
+    def test_returns_tool_result(self):
+        result = whoxy_tool.run("test@example.com")
+        assert isinstance(result, ToolResult)
+
+    def test_success_true_in_test_mode(self):
+        result = whoxy_tool.run("test@example.com")
+        assert result.success is True
+
+    def test_tool_name(self):
+        result = whoxy_tool.run("test@example.com")
+        assert result.tool == "whoxy"
+
+    def test_data_validates_as_output(self):
+        result = whoxy_tool.run("test@example.com")
+        output = WhoxyOutput(**result.data)
+        assert output.total_results == 3
+        assert len(output.domains) == 3
+
+    def test_active_expired_counts(self):
+        result = whoxy_tool.run("test@example.com")
+        output = WhoxyOutput(**result.data)
+        assert output.active_domain_count == 1
+        assert output.expired_domain_count == 2
+
+    def test_aggregated_signals(self):
+        result = whoxy_tool.run("test@example.com")
+        output = WhoxyOutput(**result.data)
+        assert "Test User Consulting LLC" in output.unique_company_names
+        assert len(output.unique_addresses) == 2
+        assert len(output.unique_registrar_names) == 2
+
+    def test_domain_fields(self):
+        result = whoxy_tool.run("test@example.com")
+        output = WhoxyOutput(**result.data)
+        dom = output.domains[0]
+        assert dom.domain_name == "testuserconsulting.com"
+        assert dom.registrant_company == "Test User Consulting LLC"
+        assert dom.create_date == "2019-03-15"
 
 
 class TestToolResultEnvelope:

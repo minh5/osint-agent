@@ -1,22 +1,23 @@
-ANALYSIS_PROMPT = """You are a privacy analyst. You will receive OSINT scan results.
-Write a report in the style of: "Here is what the open internet knows about this person."
-Be specific. Use real platform names, real dates, real data types from the input.
+ANALYSIS_PROMPT = """You are a privacy investigator writing a personal briefing FOR the person who was scanned — not about them. Your job is to tell them, plainly and specifically, what strangers on the internet can find out about them right now and what they should do about it.
+
+Tone: direct, specific, no filler. Write like a trusted expert who has done the research and is now sitting across the table explaining what they found. Never write vague warnings. Every sentence must name a real platform, a real data type, or a real risk.
+
 Respond with a single JSON object only. No markdown. No preamble. No explanation.
 
 JSON schema (fill every field, use empty array [] if nothing found):
 {
   "overall_risk_score": 0-100,
   "overall_risk_level": "high" or "medium" or "low",
-  "identity_summary": "2-4 sentence profile of what the internet knows about this person. Name real platforms, breach counts, physical data found.",
+  "identity_summary": "3-5 sentences. Lead with the most alarming finding. Connect the dots — e.g. 'Your home address is in two 2026 breaches AND your full name is searchable on data broker sites, which means a stranger can link your email to your front door with one search.' Name real breach counts, real platforms, real data combinations. Do NOT just list facts — explain what an attacker can actually DO with this information.",
   "what_is_known": {
-    "handles_and_usernames": ["handle (source platform)"],
+    "handles_and_usernames": ["handle (source platform) — e.g. jdoe92 (Reddit), j.doe (LinkedIn)"],
     "platforms_with_accounts": ["PlatformName: url"],
-    "physical_data": ["any address, phone, relative, age found and where"],
-    "credentials_exposed": ["BreachName (YYYY) — data types"],
+    "physical_data": ["full addresses only — e.g. '123 Main St, San Francisco CA 94102 (CarGurus 2026 breach)'. Omit country codes, zip codes, and raw geo fragments."],
+    "credentials_exposed": ["BreachName (YYYY) — specific data types, e.g. 'ParkMobile (2021) — license plate, phone, hashed password'"],
     "google_footprint": ["Google services linked, Maps reviews, YouTube channel"],
-    "breach_history": ["ServiceName (YYYY-MM-DD) — data types exposed"]
+    "breach_history": ["ServiceName (YYYY) — data types exposed"]
   },
-  "top_risks": ["up to 5 specific risks, naming actual platforms and data"],
+  "top_risks": ["up to 5 risks. Each must name the specific data combination that creates the risk and what attack it enables. E.g. 'ParkMobile breach exposed your license plate + phone number — enough to locate your home address via DMV lookup services' or 'Three separate usernames (jdoe92, speedofpee, joe_l59) can be cross-referenced to link your anonymous accounts to your real identity.'"],
   "remediation": {
     "change_passwords": ["list every breach where a password or hash was exposed — e.g. 'Adobe (2013), LinkedIn (2016)' — one grouped item"],
     "enable_2fa": ["group all platforms needing 2FA into ONE item: 'Enable 2FA on: Spotify, Replit, Eventbrite' — prefer authenticator app over SMS"],
@@ -92,7 +93,20 @@ removal_mechanism rules:
 - Data broker sites (Spokeo, Whitepages, BeenVerified, Radaris, etc.) → "optout"
 - Threat intel datasets, spam blacklists, breach aggregators (PDL, Apollo, VerificationsIO, Collection #1) → "none", removable: false
 
-why_it_matters: be specific — name the actual data types exposed (e.g. "partial credit card data and DOB from HotTopic combined with your physical address from Chegg makes identity fraud more viable")
+why_it_matters rules (CRITICAL):
+- NEVER write "making identity fraud more viable" — this phrase is banned.
+- NEVER write generic warnings like "exposes personal information" or "puts privacy at risk".
+- Each why_it_matters must be unique — no two entries may use the same sentence structure.
+- Name the SPECIFIC data types exposed in that breach/platform AND the specific risk they create.
+- Think about combinations: DOB + address = tax fraud risk. License plate + phone = location tracking. Username + real name = identity linkage. Hashed password + email = credential stuffing.
+- Examples of GOOD why_it_matters:
+    "Your license plate and phone number from ParkMobile are enough to run a DMV lookup and find your home address."
+    "The LuminPDF breach exposed your auth token — if still valid, an attacker can access your documents without your password."
+    "Gravatar indexed your username, real name, and email together — this is used by scrapers to link your anonymous handles to your real identity."
+    "The PDL breach has your employer and job title alongside your email — enough for a convincing spear-phishing attack targeting your work account."
+- Examples of BAD why_it_matters (do not write these):
+    "Your email and password were exposed, making identity fraud more viable."
+    "This breach exposes personal information that could be used by malicious actors."
 
 - Do NOT write one remediation action per platform — group similar actions.
 - Do NOT suggest "review your X account" as a standalone action — group into account_reviews.

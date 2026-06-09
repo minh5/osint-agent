@@ -36,7 +36,7 @@ FIXTURE_PATH = (
     Path(__file__).parent.parent / "tests" / "fixtures" / "public_records_response.json"
 )
 
-COURTLISTENER_URL = "https://www.courtlistener.com/api/rest/v4/dockets/"
+COURTLISTENER_URL = "https://www.courtlistener.com/api/rest/v4/search/"
 OPENCORPORATES_OFFICERS_URL = "https://api.opencorporates.com/v0.4/officers/search"
 
 _HEADERS = {
@@ -55,14 +55,18 @@ def _search_courtlistener(name: str, state: str | None = None) -> list[CourtCase
         logger.info("public_records: COURTLISTENER_API_TOKEN not set — skipping (free token at courtlistener.com)")
         return []
 
+    # type=r = RECAP/PACER federal dockets — searches by party name via full-text index.
+    # /dockets/ endpoint is for fetching a specific docket by ID, not name search.
     params: dict[str, str] = {
-        "q": name,
+        "q": f'"{name}"',   # quoted for exact-phrase match
+        "type": "r",        # r = RECAP dockets (federal cases)
         "order_by": "score desc",
         "page_size": "10",
     }
-    # Optionally filter by jurisdiction/state
+    # CourtListener jurisdiction codes: "fd" = federal district, "fb" = bankruptcy
+    # Passing state narrows to that state's federal courts
     if state:
-        params["court__jurisdiction"] = "fd,fb"  # federal district + bankruptcy
+        params["court"] = state.lower()  # e.g. "ca" for California federal courts
 
     headers = {**_HEADERS, "Authorization": f"Token {token}"}
 
@@ -81,20 +85,17 @@ def _search_courtlistener(name: str, state: str | None = None) -> list[CourtCase
 
     cases = []
     for item in results:
-        court_name = ""
-        if isinstance(item.get("court"), dict):
-            court_name = item["court"].get("full_name") or item["court"].get("id", "")
-        elif isinstance(item.get("court"), str):
-            court_name = item["court"]
+        # Search API returns court as a string slug (e.g. "cacd"), not a nested object
+        court_name = item.get("court") or item.get("court_id") or ""
 
         cases.append(
             CourtCase(
-                case_name=item.get("case_name") or item.get("case_name_short") or "",
-                docket_number=item.get("docket_number") or "",
+                case_name=item.get("caseName") or item.get("case_name") or "",
+                docket_number=item.get("docketNumber") or item.get("docket_number") or "",
                 court=court_name,
-                date_filed=item.get("date_filed") or "",
-                date_terminated=item.get("date_terminated"),
-                nature_of_suit=item.get("nature_of_suit") or "",
+                date_filed=item.get("dateFiled") or item.get("date_filed") or "",
+                date_terminated=item.get("dateTerminated") or item.get("date_terminated"),
+                nature_of_suit=item.get("suitNature") or item.get("nature_of_suit") or "",
                 cause=item.get("cause") or "",
                 source_url=(
                     f"https://www.courtlistener.com{item['absolute_url']}"
