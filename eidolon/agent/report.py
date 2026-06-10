@@ -622,7 +622,8 @@ def write_report(state: PipelineState) -> str:
     primary = state.classifications[0] if state.classifications else None
     identifier = _build_identifier(state)
     date_str = datetime.now().strftime("%Y-%m-%d")
-    run_id = str(uuid.uuid4())[:8]  # short UUID — 8 hex chars is unambiguous enough
+    # Reuse the run_id bound at intake so logs and the report filename match.
+    run_id = state.run_id or uuid.uuid4().hex[:8]
     base_name = f"{identifier}_{date_str}_{run_id}"
 
     json_path = output_dir / f"{base_name}.json"

@@ -1,12 +1,12 @@
 import argparse
-import logging
 import re
 import sys
 
 from eidolon import config
+from eidolon.core.logging import configure_logging, get_logger
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-logger = logging.getLogger(__name__)
+configure_logging()
+logger = get_logger(__name__)
 
 # ── Validation / sanitization ─────────────────────────────────────────────────
 

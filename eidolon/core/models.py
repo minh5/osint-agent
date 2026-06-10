@@ -22,6 +22,7 @@ class InputClassification(BaseModel):
 
 class PipelineState(BaseModel):
     raw_input: str
+    run_id: str = ""
     classifications: list[InputClassification] = []
     location_city: str | None = None
     location_state: str | None = None

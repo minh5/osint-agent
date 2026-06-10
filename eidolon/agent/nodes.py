@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -8,6 +9,7 @@ from typing import Literal, cast
 
 from eidolon import config
 from eidolon.agent.prompts import ANALYSIS_PROMPT, CORRELATION_PROMPT
+from eidolon.core.logging import bind_run_context, redact
 from eidolon.core.models import (
     AnalysisResult,
     InputClassification,
@@ -125,7 +127,20 @@ def intake_node(state: PipelineState) -> PipelineState:
     for c in classifications:
         logger.info("  classified: type=%s value=%s", c.type, c.value)
 
-    updates: dict = {"classifications": classifications}
+    # Bind run context for every subsequent log line: run_id, scan type, and a
+    # REDACTED target (never the full PII this tool exists to protect).
+    run_id = uuid.uuid4().hex[:8]
+    primary = classifications[0] if classifications else None
+    if primary:
+        bind_run_context(
+            run_id=run_id,
+            scan_type=primary.type,
+            target=redact(primary.value, primary.type),
+        )
+    else:
+        bind_run_context(run_id=run_id)
+
+    updates: dict = {"classifications": classifications, "run_id": run_id}
     if location.get("city"):
         updates["location_city"] = location["city"]
     if location.get("state"):
