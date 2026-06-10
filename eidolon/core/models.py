@@ -3,11 +3,13 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+InputType = Literal["email", "phone", "name", "org"]
+
 
 class ToolResult(BaseModel):
     success: bool
     tool: str
-    input_type: Literal["email", "phone", "name", "org"]
+    input_type: InputType
     input_value: str
     timestamp: datetime
     data: dict
