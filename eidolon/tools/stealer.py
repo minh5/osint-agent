@@ -19,14 +19,14 @@ from pathlib import Path
 
 import requests
 
-import config
-from models.shared import ToolResult
-from models.stealer import StealerLog, StealerOutput
+from eidolon import config
+from eidolon.models.shared import ToolResult
+from eidolon.models.stealer import StealerLog, StealerOutput
 
 logger = logging.getLogger(__name__)
 
 FIXTURE_PATH = (
-    Path(__file__).parent.parent / "tests" / "fixtures" / "stealer_response.json"
+    Path(__file__).parent.parent.parent / "tests" / "fixtures" / "stealer_response.json"
 )
 
 CAVALIER_URL = "https://cavalier.hudsonrock.com/api/json/v2/osint-tools/search-by-login"

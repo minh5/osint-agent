@@ -5,14 +5,14 @@ from pathlib import Path
 
 import requests
 
-import config
-from models.shared import ToolResult
-from models.shodan import ShodanHostResult, ShodanInput, ShodanOutput
+from eidolon import config
+from eidolon.models.shared import ToolResult
+from eidolon.models.shodan import ShodanHostResult, ShodanInput, ShodanOutput
 
 logger = logging.getLogger(__name__)
 
 FIXTURE_PATH = (
-    Path(__file__).parent.parent / "tests" / "fixtures" / "shodan_response.json"
+    Path(__file__).parent.parent.parent / "tests" / "fixtures" / "shodan_response.json"
 )
 INTERNETDB_URL = "https://internetdb.shodan.io/{ip}"
 

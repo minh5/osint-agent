@@ -5,14 +5,19 @@ from pathlib import Path
 
 import httpx
 
-import config
-from models.exodus import AppTrackerResult, ExodusInput, ExodusOutput, TrackerFound
-from models.shared import ToolResult
+from eidolon import config
+from eidolon.models.exodus import (
+    AppTrackerResult,
+    ExodusInput,
+    ExodusOutput,
+    TrackerFound,
+)
+from eidolon.models.shared import ToolResult
 
 logger = logging.getLogger(__name__)
 
 FIXTURE_PATH = (
-    Path(__file__).parent.parent / "tests" / "fixtures" / "exodus_response.json"
+    Path(__file__).parent.parent.parent / "tests" / "fixtures" / "exodus_response.json"
 )
 PACKAGES_PATH = Path(__file__).parent.parent / "data" / "platform_packages.json"
 

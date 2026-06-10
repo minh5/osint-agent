@@ -27,14 +27,14 @@ from pathlib import Path
 
 import requests
 
-import config
-from models.phone import PhoneCarrierInfo, PhoneInput, PhoneLookupOutput
-from models.shared import ToolResult
+from eidolon import config
+from eidolon.models.phone import PhoneCarrierInfo, PhoneInput, PhoneLookupOutput
+from eidolon.models.shared import ToolResult
 
 logger = logging.getLogger(__name__)
 
 FIXTURE_PATH = (
-    Path(__file__).parent.parent / "tests" / "fixtures" / "phone_response.json"
+    Path(__file__).parent.parent.parent / "tests" / "fixtures" / "phone_response.json"
 )
 
 NUMVERIFY_URL = "http://apilayer.net/api/validate"

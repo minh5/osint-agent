@@ -16,8 +16,8 @@ os.environ.setdefault("SCRAPFLY_API_KEY", "test")
 os.environ.setdefault("OLLAMA_HOST", "http://localhost:11434")
 os.environ.setdefault("SPIDERFOOT_HOST", "http://localhost:5001")
 
-from agent import nodes
-from models.shared import InputClassification, PipelineState, ToolResult
+from eidolon.agent import nodes
+from eidolon.models.shared import InputClassification, PipelineState, ToolResult
 
 
 def _tr(tool: str, data: dict) -> ToolResult:

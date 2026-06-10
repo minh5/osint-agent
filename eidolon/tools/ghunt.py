@@ -6,14 +6,14 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-import config
-from models.ghunt import GHuntInput, GHuntOutput
-from models.shared import ToolResult
+from eidolon import config
+from eidolon.models.ghunt import GHuntInput, GHuntOutput
+from eidolon.models.shared import ToolResult
 
 logger = logging.getLogger(__name__)
 
 FIXTURE_PATH = (
-    Path(__file__).parent.parent / "tests" / "fixtures" / "ghunt_response.json"
+    Path(__file__).parent.parent.parent / "tests" / "fixtures" / "ghunt_response.json"
 )
 CREDS_PATH = Path.home() / ".malfrats" / "ghunt" / "creds.m"
 

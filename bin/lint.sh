@@ -42,8 +42,8 @@ fi
 
 run_check "black"  uv run black --check .
 run_check "isort"  uv run isort --check-only .
-run_check "flake8" uv run flake8 agent/ tools/ models/ config.py main.py
-run_check "mypy"   uv run --with mypy mypy agent/ tools/ models/ config.py main.py
+run_check "flake8" uv run flake8 eidolon/
+run_check "mypy"   uv run --with mypy mypy eidolon/
 
 echo ""
 if [[ $FAILED -eq 0 ]]; then

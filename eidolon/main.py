@@ -3,7 +3,7 @@ import logging
 import re
 import sys
 
-import config
+from eidolon import config
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -169,8 +169,8 @@ def main():
     if args.zip:
         logger.info("  zip:   %s", args.zip)
 
-    from agent.graph import build_graph
-    from models.shared import PipelineState
+    from eidolon.agent.graph import build_graph
+    from eidolon.models.shared import PipelineState
 
     graph = build_graph()
     initial_state = PipelineState(raw_input=raw_input)

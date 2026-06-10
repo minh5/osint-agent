@@ -1,6 +1,6 @@
 from langgraph.graph import END, StateGraph
 
-from agent.nodes import (
+from eidolon.agent.nodes import (
     analysis_node,
     correlation_execute_node,
     correlation_planner_node,
@@ -9,7 +9,7 @@ from agent.nodes import (
     wave1_scan_node,
     wave2_scan_node,
 )
-from models.shared import PipelineState
+from eidolon.models.shared import PipelineState
 
 
 def build_graph():  # type: ignore[return-value]

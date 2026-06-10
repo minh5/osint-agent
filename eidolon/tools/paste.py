@@ -23,14 +23,14 @@ from pathlib import Path
 
 import requests
 
-import config
-from models.paste import PasteEntry, PasteOutput
-from models.shared import ToolResult
+from eidolon import config
+from eidolon.models.paste import PasteEntry, PasteOutput
+from eidolon.models.shared import ToolResult
 
 logger = logging.getLogger(__name__)
 
 FIXTURE_PATH = (
-    Path(__file__).parent.parent / "tests" / "fixtures" / "paste_response.json"
+    Path(__file__).parent.parent.parent / "tests" / "fixtures" / "paste_response.json"
 )
 
 HIBP_PASTE_URL = "https://haveibeenpwned.com/api/v3/pasteaccount/{email}"

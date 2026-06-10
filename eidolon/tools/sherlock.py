@@ -6,14 +6,17 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import config
-from models.shared import ToolResult
-from models.sherlock import SherlockInput, SherlockOutput, SherlockProfile
+from eidolon import config
+from eidolon.models.shared import ToolResult
+from eidolon.models.sherlock import SherlockInput, SherlockOutput, SherlockProfile
 
 logger = logging.getLogger(__name__)
 
 FIXTURE_PATH = (
-    Path(__file__).parent.parent / "tests" / "fixtures" / "sherlock_response.json"
+    Path(__file__).parent.parent.parent
+    / "tests"
+    / "fixtures"
+    / "sherlock_response.json"
 )
 FOUND_RE = re.compile(r"^\[\+\]\s+(.+?):\s+(https?://\S+)", re.MULTILINE)
 CHECKED_RE = re.compile(r"(\d+)\s+sites?", re.IGNORECASE)

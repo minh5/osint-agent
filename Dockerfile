@@ -41,4 +41,4 @@ RUN python3 bin/patch-ghunt.py
 
 # Default entrypoint: OSINT scan
 # Override with --entrypoint or `command:` in docker-compose for bin/removal.py
-ENTRYPOINT ["uv", "run", "python", "main.py"]
+ENTRYPOINT ["uv", "run", "python", "-m", "eidolon.main"]

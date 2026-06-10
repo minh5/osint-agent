@@ -7,14 +7,21 @@ from typing import Literal, cast
 
 import requests
 
-import config
-from models.shared import ToolResult
-from models.spiderfoot import SpiderfootElement, SpiderfootInput, SpiderfootOutput
+from eidolon import config
+from eidolon.models.shared import ToolResult
+from eidolon.models.spiderfoot import (
+    SpiderfootElement,
+    SpiderfootInput,
+    SpiderfootOutput,
+)
 
 logger = logging.getLogger(__name__)
 
 FIXTURE_PATH = (
-    Path(__file__).parent.parent / "tests" / "fixtures" / "spiderfoot_response.json"
+    Path(__file__).parent.parent.parent
+    / "tests"
+    / "fixtures"
+    / "spiderfoot_response.json"
 )
 
 INPUT_TYPE_MAP = {

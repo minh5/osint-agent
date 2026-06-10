@@ -7,14 +7,14 @@ from typing import Any
 import httpx
 import trio
 
-import config
-from models.holehe import HoleheInput, HoleheMatch, HoleheOutput
-from models.shared import ToolResult
+from eidolon import config
+from eidolon.models.holehe import HoleheInput, HoleheMatch, HoleheOutput
+from eidolon.models.shared import ToolResult
 
 logger = logging.getLogger(__name__)
 
 FIXTURE_PATH = (
-    Path(__file__).parent.parent / "tests" / "fixtures" / "holehe_response.json"
+    Path(__file__).parent.parent.parent / "tests" / "fixtures" / "holehe_response.json"
 )
 
 

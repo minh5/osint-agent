@@ -21,14 +21,17 @@ from pathlib import Path
 
 import requests
 
-import config
-from models.dehashed import DehashedEntry, DehashedOutput
-from models.shared import ToolResult
+from eidolon import config
+from eidolon.models.dehashed import DehashedEntry, DehashedOutput
+from eidolon.models.shared import ToolResult
 
 logger = logging.getLogger(__name__)
 
 FIXTURE_PATH = (
-    Path(__file__).parent.parent / "tests" / "fixtures" / "dehashed_response.json"
+    Path(__file__).parent.parent.parent
+    / "tests"
+    / "fixtures"
+    / "dehashed_response.json"
 )
 
 DEHASHED_URL = "https://api.dehashed.com/v2/search"

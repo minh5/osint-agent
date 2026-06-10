@@ -22,18 +22,21 @@ from pathlib import Path
 
 import requests
 
-import config
-from models.public_records import (
+from eidolon import config
+from eidolon.models.public_records import (
     CorporateRecord,
     CourtCase,
     PublicRecordsOutput,
 )
-from models.shared import ToolResult
+from eidolon.models.shared import ToolResult
 
 logger = logging.getLogger(__name__)
 
 FIXTURE_PATH = (
-    Path(__file__).parent.parent / "tests" / "fixtures" / "public_records_response.json"
+    Path(__file__).parent.parent.parent
+    / "tests"
+    / "fixtures"
+    / "public_records_response.json"
 )
 
 COURTLISTENER_URL = "https://www.courtlistener.com/api/rest/v4/search/"

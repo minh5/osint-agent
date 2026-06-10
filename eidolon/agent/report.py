@@ -5,8 +5,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-import config
-from models.shared import PipelineState
+from eidolon import config
+from eidolon.models.shared import PipelineState
 
 
 def _rem_item(item: object) -> str:

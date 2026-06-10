@@ -6,14 +6,14 @@ from pathlib import Path
 
 import requests
 
-import config
-from models.hibp import BreachRecord, HibpInput, HibpOutput
-from models.shared import ToolResult
+from eidolon import config
+from eidolon.models.hibp import BreachRecord, HibpInput, HibpOutput
+from eidolon.models.shared import ToolResult
 
 logger = logging.getLogger(__name__)
 
 FIXTURE_PATH = (
-    Path(__file__).parent.parent / "tests" / "fixtures" / "hibp_response.json"
+    Path(__file__).parent.parent.parent / "tests" / "fixtures" / "hibp_response.json"
 )
 
 

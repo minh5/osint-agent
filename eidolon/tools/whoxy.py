@@ -23,14 +23,14 @@ from pathlib import Path
 
 import requests
 
-import config
-from models.shared import ToolResult
-from models.whoxy import WhoxyDomain, WhoxyOutput
+from eidolon import config
+from eidolon.models.shared import ToolResult
+from eidolon.models.whoxy import WhoxyDomain, WhoxyOutput
 
 logger = logging.getLogger(__name__)
 
 FIXTURE_PATH = (
-    Path(__file__).parent.parent / "tests" / "fixtures" / "whoxy_response.json"
+    Path(__file__).parent.parent.parent / "tests" / "fixtures" / "whoxy_response.json"
 )
 
 WHOXY_URL = "https://api.whoxy.com/"

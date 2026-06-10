@@ -8,9 +8,9 @@ from pathlib import Path
 import requests
 from apify_client import ApifyClient
 
-import config
-from models.broker_scan import BrokerProfile, BrokerScanInput, BrokerScanOutput
-from models.shared import ToolResult
+from eidolon import config
+from eidolon.models.broker_scan import BrokerProfile, BrokerScanInput, BrokerScanOutput
+from eidolon.models.shared import ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,10 @@ def _state_to_abbrev(state: str) -> str:
 
 
 FIXTURE_PATH = (
-    Path(__file__).parent.parent / "tests" / "fixtures" / "broker_apify_response.json"
+    Path(__file__).parent.parent.parent
+    / "tests"
+    / "fixtures"
+    / "broker_apify_response.json"
 )
 FPS_BASE = "https://www.fastpeoplesearch.com/name"
 

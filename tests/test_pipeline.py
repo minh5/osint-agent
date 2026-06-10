@@ -15,8 +15,8 @@ os.environ.setdefault("SPIDERFOOT_HOST", "http://localhost:5001")
 os.environ["RESULTS_OUTPUT_PATH"] = "/tmp/osint_test_output/"
 os.environ["AI_PLATFORMS"] = "claude,chatgpt,gemini,grok"
 
-from agent.graph import build_graph
-from models.shared import AnalysisResult, PipelineState
+from eidolon.agent.graph import build_graph
+from eidolon.models.shared import AnalysisResult, PipelineState
 
 
 @pytest.fixture(autouse=True)

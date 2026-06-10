@@ -4,14 +4,14 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-import config
-from models.maigret import MaigretInput, MaigretOutput, MaigretProfile
-from models.shared import ToolResult
+from eidolon import config
+from eidolon.models.maigret import MaigretInput, MaigretOutput, MaigretProfile
+from eidolon.models.shared import ToolResult
 
 logger = logging.getLogger(__name__)
 
 FIXTURE_PATH = (
-    Path(__file__).parent.parent / "tests" / "fixtures" / "maigret_response.json"
+    Path(__file__).parent.parent.parent / "tests" / "fixtures" / "maigret_response.json"
 )
 
 

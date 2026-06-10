@@ -9,35 +9,35 @@ os.environ.setdefault("APIFY_ACTOR_ID", "test")
 os.environ.setdefault("OLLAMA_HOST", "http://localhost:11434")
 os.environ.setdefault("SPIDERFOOT_HOST", "http://localhost:5001")
 
-import tools.ai_audit as ai_audit_tool
-import tools.blackbird as blackbird_tool
-import tools.broker_scan as broker_scan_tool
-import tools.dehashed as dehashed_tool
-import tools.ghunt as ghunt_tool
-import tools.hibp as hibp_tool
-import tools.holehe as holehe_tool
-import tools.maigret as maigret_tool
-import tools.paste as paste_tool
-import tools.phone as phone_tool
-import tools.public_records as public_records_tool
-import tools.spiderfoot as spiderfoot_tool
-import tools.stealer as stealer_tool
-import tools.whoxy as whoxy_tool
-from models.ai_audit import AiAuditInput, AiAuditOutput
-from models.blackbird import BlackbirdInput, BlackbirdOutput
-from models.broker_scan import BrokerScanInput, BrokerScanOutput
-from models.dehashed import DehashedOutput
-from models.ghunt import GHuntInput, GHuntOutput
-from models.hibp import HibpInput, HibpOutput
-from models.holehe import HoleheInput, HoleheOutput
-from models.maigret import MaigretInput, MaigretOutput
-from models.paste import PasteOutput
-from models.phone import PhoneInput, PhoneLookupOutput
-from models.public_records import PublicRecordsOutput
-from models.shared import ToolResult
-from models.spiderfoot import SpiderfootInput, SpiderfootOutput
-from models.stealer import StealerOutput
-from models.whoxy import WhoxyOutput
+import eidolon.tools.ai_audit as ai_audit_tool
+import eidolon.tools.blackbird as blackbird_tool
+import eidolon.tools.broker_scan as broker_scan_tool
+import eidolon.tools.dehashed as dehashed_tool
+import eidolon.tools.ghunt as ghunt_tool
+import eidolon.tools.hibp as hibp_tool
+import eidolon.tools.holehe as holehe_tool
+import eidolon.tools.maigret as maigret_tool
+import eidolon.tools.paste as paste_tool
+import eidolon.tools.phone as phone_tool
+import eidolon.tools.public_records as public_records_tool
+import eidolon.tools.spiderfoot as spiderfoot_tool
+import eidolon.tools.stealer as stealer_tool
+import eidolon.tools.whoxy as whoxy_tool
+from eidolon.models.ai_audit import AiAuditInput, AiAuditOutput
+from eidolon.models.blackbird import BlackbirdInput, BlackbirdOutput
+from eidolon.models.broker_scan import BrokerScanInput, BrokerScanOutput
+from eidolon.models.dehashed import DehashedOutput
+from eidolon.models.ghunt import GHuntInput, GHuntOutput
+from eidolon.models.hibp import HibpInput, HibpOutput
+from eidolon.models.holehe import HoleheInput, HoleheOutput
+from eidolon.models.maigret import MaigretInput, MaigretOutput
+from eidolon.models.paste import PasteOutput
+from eidolon.models.phone import PhoneInput, PhoneLookupOutput
+from eidolon.models.public_records import PublicRecordsOutput
+from eidolon.models.shared import ToolResult
+from eidolon.models.spiderfoot import SpiderfootInput, SpiderfootOutput
+from eidolon.models.stealer import StealerOutput
+from eidolon.models.whoxy import WhoxyOutput
 
 
 class TestHibpTool:
@@ -437,7 +437,7 @@ class TestPasteTool:
     def test_is_recent_helper(self):
         from datetime import datetime, timedelta, timezone
 
-        from tools.paste import _is_recent
+        from eidolon.tools.paste import _is_recent
 
         recent = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
         old = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
@@ -445,7 +445,7 @@ class TestPasteTool:
         assert _is_recent(old) is False
 
     def test_paste_url_helper(self):
-        from tools.paste import _paste_url
+        from eidolon.tools.paste import _paste_url
 
         assert "pastebin.com/abc123" in _paste_url("Pastebin", "abc123")
         assert "pastie.org" in _paste_url("Pastie", "xyz")
@@ -501,7 +501,7 @@ class TestDeterministicPivots:
     def _make_state(self, primary_email: str, dehashed_entries: list[dict]):
         from datetime import datetime, timezone
 
-        from models.shared import InputClassification, PipelineState, ToolResult
+        from eidolon.models.shared import InputClassification, PipelineState, ToolResult
 
         dehashed_result = ToolResult(
             success=True,
@@ -522,7 +522,7 @@ class TestDeterministicPivots:
         )
 
     def test_plus_alias_detected(self):
-        from agent.nodes import _extract_deterministic_pivots
+        from eidolon.agent.nodes import _extract_deterministic_pivots
 
         state = self._make_state(
             "user@gmail.com",
@@ -535,7 +535,7 @@ class TestDeterministicPivots:
         assert "alias" in pivots[0]["reason"].lower()
 
     def test_alternate_domain_detected(self):
-        from agent.nodes import _extract_deterministic_pivots
+        from eidolon.agent.nodes import _extract_deterministic_pivots
 
         state = self._make_state(
             "user@gmail.com",
@@ -546,7 +546,7 @@ class TestDeterministicPivots:
         assert pivots[0]["value"] == "user@comcast.net"
 
     def test_original_email_not_duplicated(self):
-        from agent.nodes import _extract_deterministic_pivots
+        from eidolon.agent.nodes import _extract_deterministic_pivots
 
         state = self._make_state(
             "user@gmail.com",
@@ -556,7 +556,7 @@ class TestDeterministicPivots:
         assert pivots == []
 
     def test_dedup_across_entries(self):
-        from agent.nodes import _extract_deterministic_pivots
+        from eidolon.agent.nodes import _extract_deterministic_pivots
 
         state = self._make_state(
             "user@gmail.com",
@@ -569,7 +569,7 @@ class TestDeterministicPivots:
         assert len(pivots) == 1
 
     def test_capped_at_three(self):
-        from agent.nodes import _extract_deterministic_pivots
+        from eidolon.agent.nodes import _extract_deterministic_pivots
 
         state = self._make_state(
             "user@gmail.com",
@@ -584,8 +584,8 @@ class TestDeterministicPivots:
         assert len(pivots) == 3
 
     def test_no_dehashed_result_returns_empty(self):
-        from agent.nodes import _extract_deterministic_pivots
-        from models.shared import InputClassification, PipelineState
+        from eidolon.agent.nodes import _extract_deterministic_pivots
+        from eidolon.models.shared import InputClassification, PipelineState
 
         state = PipelineState(
             raw_input="user@gmail.com",

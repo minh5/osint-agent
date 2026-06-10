@@ -6,14 +6,17 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import config
-from models.blackbird import BlackbirdAccount, BlackbirdInput, BlackbirdOutput
-from models.shared import ToolResult
+from eidolon import config
+from eidolon.models.blackbird import BlackbirdAccount, BlackbirdInput, BlackbirdOutput
+from eidolon.models.shared import ToolResult
 
 logger = logging.getLogger(__name__)
 
 FIXTURE_PATH = (
-    Path(__file__).parent.parent / "tests" / "fixtures" / "blackbird_response.json"
+    Path(__file__).parent.parent.parent
+    / "tests"
+    / "fixtures"
+    / "blackbird_response.json"
 )
 BLACKBIRD_DIR = (
     Path("/opt/blackbird")
