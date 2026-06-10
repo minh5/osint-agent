@@ -6,9 +6,27 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from pydantic import BaseModel
+
 from eidolon import config
-from eidolon.models.shared import ToolResult
-from eidolon.models.sherlock import SherlockInput, SherlockOutput, SherlockProfile
+from eidolon.core.models import ToolResult
+
+
+class SherlockInput(BaseModel):
+    username: str
+
+
+class SherlockProfile(BaseModel):
+    platform: str
+    url: str
+
+
+class SherlockOutput(BaseModel):
+    username: str
+    platforms_checked: int
+    profiles_found: list[SherlockProfile]
+    found_count: int
+
 
 logger = logging.getLogger(__name__)
 

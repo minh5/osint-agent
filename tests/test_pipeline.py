@@ -16,7 +16,7 @@ os.environ["RESULTS_OUTPUT_PATH"] = "/tmp/osint_test_output/"
 os.environ["AI_PLATFORMS"] = "claude,chatgpt,gemini,grok"
 
 from eidolon.agent.graph import build_graph
-from eidolon.models.shared import AnalysisResult, PipelineState
+from eidolon.core.models import AnalysisResult, PipelineState
 
 
 @pytest.fixture(autouse=True)

@@ -170,7 +170,7 @@ def main():
         logger.info("  zip:   %s", args.zip)
 
     from eidolon.agent.graph import build_graph
-    from eidolon.models.shared import PipelineState
+    from eidolon.core.models import PipelineState
 
     graph = build_graph()
     initial_state = PipelineState(raw_input=raw_input)

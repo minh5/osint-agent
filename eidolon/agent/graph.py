@@ -9,7 +9,7 @@ from eidolon.agent.nodes import (
     wave1_scan_node,
     wave2_scan_node,
 )
-from eidolon.models.shared import PipelineState
+from eidolon.core.models import PipelineState
 
 
 def build_graph():  # type: ignore[return-value]

@@ -17,7 +17,7 @@ os.environ.setdefault("OLLAMA_HOST", "http://localhost:11434")
 os.environ.setdefault("SPIDERFOOT_HOST", "http://localhost:5001")
 
 from eidolon.agent import nodes
-from eidolon.models.shared import InputClassification, PipelineState, ToolResult
+from eidolon.core.models import InputClassification, PipelineState, ToolResult
 
 
 def _tr(tool: str, data: dict) -> ToolResult:

@@ -4,10 +4,35 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
+from pydantic import BaseModel
 
 from eidolon import config
-from eidolon.models.shared import ToolResult
-from eidolon.models.shodan import ShodanHostResult, ShodanInput, ShodanOutput
+from eidolon.core.models import ToolResult
+
+
+class ShodanInput(BaseModel):
+    ip: str
+
+
+class ShodanHostResult(BaseModel):
+    ip: str
+    ports: list[int] = []
+    hostnames: list[str] = []
+    org: str = ""
+    isp: str = ""
+    country: str = ""
+    vulns: list[str] = []
+    tags: list[str] = []
+    last_update: str = ""
+
+
+class ShodanOutput(BaseModel):
+    ips_checked: int
+    hosts: list[ShodanHostResult]
+    total_open_ports: int
+    total_vulns: int
+    high_risk_ips: list[str]
+
 
 logger = logging.getLogger(__name__)
 

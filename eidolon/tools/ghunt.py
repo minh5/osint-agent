@@ -6,9 +6,26 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from pydantic import BaseModel
+
 from eidolon import config
-from eidolon.models.ghunt import GHuntInput, GHuntOutput
-from eidolon.models.shared import ToolResult
+from eidolon.core.models import ToolResult
+
+
+class GHuntInput(BaseModel):
+    email: str
+
+
+class GHuntOutput(BaseModel):
+    email: str
+    found: bool
+    name: str = ""
+    profile_photo_url: str = ""
+    google_services: list[str] = []
+    maps_reviews_count: int = 0
+    youtube_channel: str = ""
+    raw: dict = {}
+
 
 logger = logging.getLogger(__name__)
 

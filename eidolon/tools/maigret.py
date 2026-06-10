@@ -4,9 +4,32 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
+from pydantic import BaseModel
+
 from eidolon import config
-from eidolon.models.maigret import MaigretInput, MaigretOutput, MaigretProfile
-from eidolon.models.shared import ToolResult
+from eidolon.core.models import ToolResult
+
+
+class MaigretInput(BaseModel):
+    username: str
+    timeout: int = 10
+    max_connections: int = 50
+
+
+class MaigretProfile(BaseModel):
+    platform: str
+    url: str
+    status: str = "CLAIMED"
+    ids_found: list[str] = []
+    links: list[str] = []
+
+
+class MaigretOutput(BaseModel):
+    username: str
+    platforms_checked: int
+    profiles_found: list[MaigretProfile]
+    found_count: int
+
 
 logger = logging.getLogger(__name__)
 

@@ -18,7 +18,6 @@ OPTIONAL_VARS_WITH_DEFAULTS = {
     "TEST_MODE": "false",
     "RESULTS_OUTPUT_PATH": "output/",
     "SHODAN_API_KEY": "",
-    "EXODUS_API_TOKEN": "",  # free token at reports.exodus-privacy.eu.org/en/api/
     "NUMVERIFY_API_KEY": "",  # free tier: 100 req/month at numverify.com
     "COURTLISTENER_API_TOKEN": "",  # free; courtlistener.com -> profile -> API
     "OPENCORPORATES_API_KEY": "",  # free tier at opencorporates.com/api_access

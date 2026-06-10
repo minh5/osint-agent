@@ -18,10 +18,34 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
+from pydantic import BaseModel
 
 from eidolon import config
-from eidolon.models.shared import ToolResult
-from eidolon.models.stealer import StealerLog, StealerOutput
+from eidolon.core.models import ToolResult
+
+
+class StealerLog(BaseModel):
+    computer_name: str = ""
+    operating_system: str = ""
+    ip: str = ""
+    date_compromised: str = ""
+    malware_family: str = ""
+    # How many saved credentials were on the infected machine
+    credential_count: int = 0
+    # How many applications were fingerprinted
+    application_count: int = 0
+
+
+class StealerOutput(BaseModel):
+    query_email: str = ""
+    found: bool = False
+    stealer_count: int = 0
+    logs: list[StealerLog] = []
+    malware_families: list[str] = []
+    # ISO date strings — earliest/latest known compromise
+    earliest_compromise: str = ""
+    latest_compromise: str = ""
+
 
 logger = logging.getLogger(__name__)
 

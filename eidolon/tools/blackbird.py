@@ -6,9 +6,29 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from pydantic import BaseModel
+
 from eidolon import config
-from eidolon.models.blackbird import BlackbirdAccount, BlackbirdInput, BlackbirdOutput
-from eidolon.models.shared import ToolResult
+from eidolon.core.models import ToolResult
+
+
+class BlackbirdInput(BaseModel):
+    email: str
+
+
+class BlackbirdAccount(BaseModel):
+    platform: str
+    url: str
+    category: str = ""
+    metadata: list[dict] = []
+
+
+class BlackbirdOutput(BaseModel):
+    email: str
+    platforms_checked: int
+    accounts_found: list[BlackbirdAccount]
+    found_count: int
+
 
 logger = logging.getLogger(__name__)
 

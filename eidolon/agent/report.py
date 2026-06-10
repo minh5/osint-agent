@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from eidolon import config
-from eidolon.models.shared import PipelineState
+from eidolon.core.models import PipelineState
 
 
 def _rem_item(item: object) -> str:

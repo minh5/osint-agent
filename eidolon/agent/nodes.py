@@ -8,22 +8,22 @@ from typing import Literal, cast
 
 from eidolon import config
 from eidolon.agent.prompts import ANALYSIS_PROMPT, CORRELATION_PROMPT
-from eidolon.models.ai_audit import AiAuditInput
-from eidolon.models.blackbird import BlackbirdInput
-from eidolon.models.broker_scan import BrokerScanInput, BrokerScanOutput
-from eidolon.models.ghunt import GHuntInput
-from eidolon.models.hibp import HibpInput
-from eidolon.models.holehe import HoleheInput
-from eidolon.models.maigret import MaigretInput
-from eidolon.models.phone import PhoneInput
-from eidolon.models.shared import (
+from eidolon.core.models import (
     AnalysisResult,
     InputClassification,
     PipelineState,
     ToolResult,
 )
-from eidolon.models.shodan import ShodanInput
-from eidolon.models.spiderfoot import SpiderfootInput
+from eidolon.tools.ai_audit import AiAuditInput
+from eidolon.tools.blackbird import BlackbirdInput
+from eidolon.tools.broker_scan import BrokerScanInput, BrokerScanOutput
+from eidolon.tools.ghunt import GHuntInput
+from eidolon.tools.hibp import HibpInput
+from eidolon.tools.holehe import HoleheInput
+from eidolon.tools.maigret import MaigretInput
+from eidolon.tools.phone import PhoneInput
+from eidolon.tools.shodan import ShodanInput
+from eidolon.tools.spiderfoot import SpiderfootInput
 
 logger = logging.getLogger(__name__)
 
@@ -361,8 +361,8 @@ def ghunt_node(state: PipelineState) -> PipelineState:
 
 
 def shodan_node(state: PipelineState) -> PipelineState:
-    from eidolon.models.shodan import ShodanOutput
     from eidolon.tools import shodan as shodan_tool
+    from eidolon.tools.shodan import ShodanOutput
 
     if not state.spiderfoot_result or not state.spiderfoot_result.success:
         logger.info("shodan_node: no spiderfoot_result, skipping")
@@ -1339,8 +1339,8 @@ def correlation_execute_node(state: PipelineState) -> PipelineState:
 
         try:
             if ptype == "username":
-                from eidolon.models.maigret import MaigretInput
                 from eidolon.tools import maigret as maigret_tool
+                from eidolon.tools.maigret import MaigretInput
 
                 result = maigret_tool.run(MaigretInput(username=pvalue))
                 results.append(result)
@@ -1352,24 +1352,24 @@ def correlation_execute_node(state: PipelineState) -> PipelineState:
                 results.append(result)
 
             elif ptype == "ip":
-                from eidolon.models.shodan import ShodanInput
                 from eidolon.tools import shodan as shodan_tool
+                from eidolon.tools.shodan import ShodanInput
 
                 result = shodan_tool.run(ShodanInput(ip=pvalue))
                 results.append(result)
 
             elif ptype == "phone":
-                from eidolon.models.phone import PhoneInput
                 from eidolon.tools import phone as phone_tool
+                from eidolon.tools.phone import PhoneInput
 
                 result = phone_tool.run(PhoneInput(phone=pvalue))
                 results.append(result)
 
             elif ptype == "email":
-                from eidolon.models.hibp import HibpInput
-                from eidolon.models.holehe import HoleheInput
                 from eidolon.tools import hibp as hibp_tool
                 from eidolon.tools import holehe as holehe_tool
+                from eidolon.tools.hibp import HibpInput
+                from eidolon.tools.holehe import HoleheInput
 
                 hibp_result = hibp_tool.run(HibpInput(input_type="email", value=pvalue))
                 results.append(hibp_result)

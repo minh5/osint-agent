@@ -23,21 +23,21 @@ import eidolon.tools.public_records as public_records_tool
 import eidolon.tools.spiderfoot as spiderfoot_tool
 import eidolon.tools.stealer as stealer_tool
 import eidolon.tools.whoxy as whoxy_tool
-from eidolon.models.ai_audit import AiAuditInput, AiAuditOutput
-from eidolon.models.blackbird import BlackbirdInput, BlackbirdOutput
-from eidolon.models.broker_scan import BrokerScanInput, BrokerScanOutput
-from eidolon.models.dehashed import DehashedOutput
-from eidolon.models.ghunt import GHuntInput, GHuntOutput
-from eidolon.models.hibp import HibpInput, HibpOutput
-from eidolon.models.holehe import HoleheInput, HoleheOutput
-from eidolon.models.maigret import MaigretInput, MaigretOutput
-from eidolon.models.paste import PasteOutput
-from eidolon.models.phone import PhoneInput, PhoneLookupOutput
-from eidolon.models.public_records import PublicRecordsOutput
-from eidolon.models.shared import ToolResult
-from eidolon.models.spiderfoot import SpiderfootInput, SpiderfootOutput
-from eidolon.models.stealer import StealerOutput
-from eidolon.models.whoxy import WhoxyOutput
+from eidolon.core.models import ToolResult
+from eidolon.tools.ai_audit import AiAuditInput, AiAuditOutput
+from eidolon.tools.blackbird import BlackbirdInput, BlackbirdOutput
+from eidolon.tools.broker_scan import BrokerScanInput, BrokerScanOutput
+from eidolon.tools.dehashed import DehashedOutput
+from eidolon.tools.ghunt import GHuntInput, GHuntOutput
+from eidolon.tools.hibp import HibpInput, HibpOutput
+from eidolon.tools.holehe import HoleheInput, HoleheOutput
+from eidolon.tools.maigret import MaigretInput, MaigretOutput
+from eidolon.tools.paste import PasteOutput
+from eidolon.tools.phone import PhoneInput, PhoneLookupOutput
+from eidolon.tools.public_records import PublicRecordsOutput
+from eidolon.tools.spiderfoot import SpiderfootInput, SpiderfootOutput
+from eidolon.tools.stealer import StealerOutput
+from eidolon.tools.whoxy import WhoxyOutput
 
 
 class TestHibpTool:
@@ -501,7 +501,7 @@ class TestDeterministicPivots:
     def _make_state(self, primary_email: str, dehashed_entries: list[dict]):
         from datetime import datetime, timezone
 
-        from eidolon.models.shared import InputClassification, PipelineState, ToolResult
+        from eidolon.core.models import InputClassification, PipelineState, ToolResult
 
         dehashed_result = ToolResult(
             success=True,
@@ -585,7 +585,7 @@ class TestDeterministicPivots:
 
     def test_no_dehashed_result_returns_empty(self):
         from eidolon.agent.nodes import _extract_deterministic_pivots
-        from eidolon.models.shared import InputClassification, PipelineState
+        from eidolon.core.models import InputClassification, PipelineState
 
         state = PipelineState(
             raw_input="user@gmail.com",
