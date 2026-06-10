@@ -503,7 +503,7 @@ def dehashed_node(state: PipelineState) -> PipelineState:
         logger.info("dehashed_node: no email input, skipping")
         return state
 
-    result = dehashed_tool.run(primary.value)
+    result = dehashed_tool.run(dehashed_tool.DehashedInput(email=primary.value))
     if result.success:
         d = result.data
         logger.info(

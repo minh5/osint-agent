@@ -335,31 +335,43 @@ class TestPublicRecordsTool:
 
 class TestDehashedTool:
     def test_returns_tool_result(self):
-        result = dehashed_tool.run("test@example.com")
+        result = dehashed_tool.run(
+            dehashed_tool.DehashedInput(email="test@example.com")
+        )
         assert isinstance(result, ToolResult)
 
     def test_success_true_in_test_mode(self):
-        result = dehashed_tool.run("test@example.com")
+        result = dehashed_tool.run(
+            dehashed_tool.DehashedInput(email="test@example.com")
+        )
         assert result.success is True
 
     def test_tool_name(self):
-        result = dehashed_tool.run("test@example.com")
+        result = dehashed_tool.run(
+            dehashed_tool.DehashedInput(email="test@example.com")
+        )
         assert result.tool == "dehashed"
 
     def test_data_validates_as_output(self):
-        result = dehashed_tool.run("test@example.com")
+        result = dehashed_tool.run(
+            dehashed_tool.DehashedInput(email="test@example.com")
+        )
         output = DehashedOutput(**result.data)
         assert output.total == 4
         assert len(output.entries) == 4
 
     def test_aggregated_counts(self):
-        result = dehashed_tool.run("test@example.com")
+        result = dehashed_tool.run(
+            dehashed_tool.DehashedInput(email="test@example.com")
+        )
         output = DehashedOutput(**result.data)
         assert output.plaintext_password_count == 1
         assert output.hashed_password_count == 2
 
     def test_unique_fields(self):
-        result = dehashed_tool.run("test@example.com")
+        result = dehashed_tool.run(
+            dehashed_tool.DehashedInput(email="test@example.com")
+        )
         output = DehashedOutput(**result.data)
         assert "testuser" in output.unique_usernames
         assert len(output.unique_addresses) == 1

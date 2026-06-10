@@ -15,15 +15,16 @@ Requires: DEHASHED_API_KEY in .env (DEHASHED_EMAIL no longer needed for v2).
 Skips gracefully if key is missing.
 """
 
-import logging
-from datetime import datetime, timezone
-from pathlib import Path
-
 import requests
+import structlog
 from pydantic import BaseModel
 
 from eidolon import config
-from eidolon.core.models import ToolResult
+from eidolon.core.tool import BaseTool
+
+
+class DehashedInput(BaseModel):
+    email: str
 
 
 class DehashedEntry(BaseModel):
@@ -52,15 +53,6 @@ class DehashedOutput(BaseModel):
     unique_databases: list[str] = []  # breach sources (complements HIBP)
 
 
-logger = logging.getLogger(__name__)
-
-FIXTURE_PATH = (
-    Path(__file__).parent.parent.parent
-    / "tests"
-    / "fixtures"
-    / "dehashed_response.json"
-)
-
 DEHASHED_URL = "https://api.dehashed.com/v2/search"
 
 
@@ -84,49 +76,29 @@ def _hash_type(h: str) -> str:
     return "unknown"
 
 
-def run(email: str) -> ToolResult:
-    logger.info("dehashed: searching email=%s", email)
+class DehashedTool(BaseTool[DehashedInput]):
+    name = "dehashed"
+    input_type = "email"
 
-    if config.is_test_mode():
-        import json
+    def _input_value(self, inp: DehashedInput) -> str:
+        return inp.email
 
-        raw = json.loads(FIXTURE_PATH.read_text())
-        return ToolResult(**raw)
+    def _execute(self, inp: DehashedInput, log: structlog.stdlib.BoundLogger) -> dict:
+        email = inp.email
+        dh_key = config.get("DEHASHED_API_KEY")
+        if not dh_key:
+            log.info("skipped — DEHASHED_API_KEY not set")
+            return DehashedOutput(query=email).model_dump()
 
-    dh_key = config.get("DEHASHED_API_KEY")
-
-    if not dh_key:
-        logger.info(
-            "dehashed: DEHASHED_API_KEY not set — skipping "
-            "(register at dehashed.com, API key from profile page)"
-        )
-        output = DehashedOutput(query=email)
-        return ToolResult(
-            success=True,
-            tool="dehashed",
-            input_type="email",
-            input_value=email,
-            timestamp=datetime.now(timezone.utc),
-            data=output.model_dump(),
-        )
-
-    try:
         # v2 API: POST with JSON body, API key in header.
         resp = requests.post(
             DEHASHED_URL,
             json={"query": f"email:{email}", "size": 50, "de_dupe": True},
-            headers={
-                "Dehashed-Api-Key": dh_key,
-                "Content-Type": "application/json",
-            },
+            headers={"Dehashed-Api-Key": dh_key, "Content-Type": "application/json"},
             timeout=20,
         )
         if not resp.ok:
-            logger.error(
-                "dehashed: HTTP %s — response body: %s",
-                resp.status_code,
-                resp.text[:500],
-            )
+            log.error("http error", status=resp.status_code, body=resp.text[:500])
         resp.raise_for_status()
         raw = resp.json()
 
@@ -182,33 +154,15 @@ def run(email: str) -> ToolResult:
             unique_phones=phones,
             unique_databases=databases,
         )
-
-        logger.info(
-            "dehashed: OK — total=%d plaintext=%d hashed=%d addresses=%d usernames=%d",
-            output.total,
-            output.plaintext_password_count,
-            output.hashed_password_count,
-            len(output.unique_addresses),
-            len(output.unique_usernames),
+        log.info(
+            "ok",
+            total=output.total,
+            plaintext=output.plaintext_password_count,
+            hashed=output.hashed_password_count,
+            addresses=len(output.unique_addresses),
+            usernames=len(output.unique_usernames),
         )
+        return output.model_dump()
 
-        return ToolResult(
-            success=True,
-            tool="dehashed",
-            input_type="email",
-            input_value=email,
-            timestamp=datetime.now(timezone.utc),
-            data=output.model_dump(),
-        )
 
-    except Exception as exc:
-        logger.error("dehashed: FAILED — %s", exc, exc_info=True)
-        return ToolResult(
-            success=False,
-            tool="dehashed",
-            input_type="email",
-            input_value=email,
-            timestamp=datetime.now(timezone.utc),
-            data={},
-            error=f"dehashed error: {exc}",
-        )
+run = DehashedTool().run
