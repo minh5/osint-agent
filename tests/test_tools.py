@@ -9,31 +9,35 @@ os.environ.setdefault("APIFY_ACTOR_ID", "test")
 os.environ.setdefault("OLLAMA_HOST", "http://localhost:11434")
 os.environ.setdefault("SPIDERFOOT_HOST", "http://localhost:5001")
 
-import tools.dehashed as dehashed_tool
-import tools.whoxy as whoxy_tool
 import tools.ai_audit as ai_audit_tool
 import tools.blackbird as blackbird_tool
 import tools.broker_scan as broker_scan_tool
+import tools.dehashed as dehashed_tool
 import tools.ghunt as ghunt_tool
 import tools.hibp as hibp_tool
 import tools.holehe as holehe_tool
 import tools.maigret as maigret_tool
+import tools.paste as paste_tool
 import tools.phone as phone_tool
 import tools.public_records as public_records_tool
 import tools.spiderfoot as spiderfoot_tool
-from models.dehashed import DehashedOutput
-from models.whoxy import WhoxyOutput
+import tools.stealer as stealer_tool
+import tools.whoxy as whoxy_tool
 from models.ai_audit import AiAuditInput, AiAuditOutput
 from models.blackbird import BlackbirdInput, BlackbirdOutput
 from models.broker_scan import BrokerScanInput, BrokerScanOutput
+from models.dehashed import DehashedOutput
 from models.ghunt import GHuntInput, GHuntOutput
 from models.hibp import HibpInput, HibpOutput
 from models.holehe import HoleheInput, HoleheOutput
 from models.maigret import MaigretInput, MaigretOutput
+from models.paste import PasteOutput
 from models.phone import PhoneInput, PhoneLookupOutput
 from models.public_records import PublicRecordsOutput
 from models.shared import ToolResult
 from models.spiderfoot import SpiderfootInput, SpiderfootOutput
+from models.stealer import StealerOutput
+from models.whoxy import WhoxyOutput
 
 
 class TestHibpTool:
@@ -360,7 +364,12 @@ class TestDehashedTool:
         assert "testuser" in output.unique_usernames
         assert len(output.unique_addresses) == 1
         assert "+14155551234" in output.unique_phones
-        assert set(output.unique_databases) == {"LinkedIn", "Adobe", "EatStreet", "Apollo"}
+        assert set(output.unique_databases) == {
+            "LinkedIn",
+            "Adobe",
+            "EatStreet",
+            "Apollo",
+        }
 
 
 class TestWhoxyTool:
@@ -402,6 +411,191 @@ class TestWhoxyTool:
         assert dom.domain_name == "testuserconsulting.com"
         assert dom.registrant_company == "Test User Consulting LLC"
         assert dom.create_date == "2019-03-15"
+
+
+class TestPasteTool:
+    def test_returns_tool_result(self):
+        result = paste_tool.run("test@example.com")
+        assert isinstance(result, ToolResult)
+
+    def test_success_in_test_mode(self):
+        result = paste_tool.run("test@example.com")
+        assert result.success is True
+
+    def test_tool_name(self):
+        result = paste_tool.run("test@example.com")
+        assert result.tool == "paste"
+
+    def test_output_schema(self):
+        result = paste_tool.run("test@example.com")
+        output = PasteOutput(**result.data)
+        assert output.paste_count == 3
+        assert output.credential_paste_count == 2
+        assert output.recent_paste_count == 1
+        assert output.plaintext_passwords_found == 2
+
+    def test_is_recent_helper(self):
+        from datetime import datetime, timedelta, timezone
+
+        from tools.paste import _is_recent
+
+        recent = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+        old = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
+        assert _is_recent(recent) is True
+        assert _is_recent(old) is False
+
+    def test_paste_url_helper(self):
+        from tools.paste import _paste_url
+
+        assert "pastebin.com/abc123" in _paste_url("Pastebin", "abc123")
+        assert "pastie.org" in _paste_url("Pastie", "xyz")
+
+
+class TestStealerTool:
+    def test_returns_tool_result(self):
+        result = stealer_tool.run("test@example.com")
+        assert isinstance(result, ToolResult)
+
+    def test_success_in_test_mode(self):
+        result = stealer_tool.run("test@example.com")
+        assert result.success is True
+
+    def test_tool_name(self):
+        result = stealer_tool.run("test@example.com")
+        assert result.tool == "stealer"
+
+    def test_output_schema(self):
+        result = stealer_tool.run("test@example.com")
+        output = StealerOutput(**result.data)
+        assert output.found is True
+        assert output.stealer_count == 2
+        assert "RedLine" in output.malware_families
+        assert "Vidar" in output.malware_families
+
+    def test_compromise_dates(self):
+        result = stealer_tool.run("test@example.com")
+        output = StealerOutput(**result.data)
+        assert output.earliest_compromise == "2023-08-14"
+        assert output.latest_compromise == "2024-11-02"
+
+    def test_log_fields(self):
+        result = stealer_tool.run("test@example.com")
+        output = StealerOutput(**result.data)
+        log = output.logs[0]
+        assert log.computer_name == "DESKTOP-A1B2C3"
+        assert log.malware_family == "RedLine"
+        assert log.credential_count == 147
+
+    def test_ip_partially_masked_in_fixture(self):
+        # Hudson Rock masks IPs server-side (e.g. "98.123.***.***")
+        result = stealer_tool.run("test@example.com")
+        output = StealerOutput(**result.data)
+        for log in output.logs:
+            if log.ip:
+                assert "***" in log.ip, f"IP not masked: {log.ip}"
+
+
+class TestDeterministicPivots:
+    """Tests for _extract_deterministic_pivots in agent/nodes.py."""
+
+    def _make_state(self, primary_email: str, dehashed_entries: list[dict]):
+        from datetime import datetime, timezone
+
+        from models.shared import InputClassification, PipelineState, ToolResult
+
+        dehashed_result = ToolResult(
+            success=True,
+            tool="dehashed",
+            input_type="email",
+            input_value=primary_email,
+            timestamp=datetime.now(timezone.utc),
+            data={"entries": dehashed_entries, "total": len(dehashed_entries)},
+        )
+        return PipelineState(
+            raw_input=primary_email,
+            classifications=[
+                InputClassification(
+                    type="email", value=primary_email, raw=primary_email
+                )
+            ],
+            dehashed_result=dehashed_result,
+        )
+
+    def test_plus_alias_detected(self):
+        from agent.nodes import _extract_deterministic_pivots
+
+        state = self._make_state(
+            "user@gmail.com",
+            [{"email": "user+amazon@gmail.com", "database_name": "SomeSite"}],
+        )
+        pivots = _extract_deterministic_pivots(state)
+        assert len(pivots) == 1
+        assert pivots[0]["type"] == "email"
+        assert pivots[0]["value"] == "user+amazon@gmail.com"
+        assert "alias" in pivots[0]["reason"].lower()
+
+    def test_alternate_domain_detected(self):
+        from agent.nodes import _extract_deterministic_pivots
+
+        state = self._make_state(
+            "user@gmail.com",
+            [{"email": "user@comcast.net", "database_name": "SomeSite"}],
+        )
+        pivots = _extract_deterministic_pivots(state)
+        assert len(pivots) == 1
+        assert pivots[0]["value"] == "user@comcast.net"
+
+    def test_original_email_not_duplicated(self):
+        from agent.nodes import _extract_deterministic_pivots
+
+        state = self._make_state(
+            "user@gmail.com",
+            [{"email": "user@gmail.com", "database_name": "SomeSite"}],
+        )
+        pivots = _extract_deterministic_pivots(state)
+        assert pivots == []
+
+    def test_dedup_across_entries(self):
+        from agent.nodes import _extract_deterministic_pivots
+
+        state = self._make_state(
+            "user@gmail.com",
+            [
+                {"email": "user@comcast.net", "database_name": "Site1"},
+                {"email": "user@comcast.net", "database_name": "Site2"},
+            ],
+        )
+        pivots = _extract_deterministic_pivots(state)
+        assert len(pivots) == 1
+
+    def test_capped_at_three(self):
+        from agent.nodes import _extract_deterministic_pivots
+
+        state = self._make_state(
+            "user@gmail.com",
+            [
+                {"email": "user@comcast.net"},
+                {"email": "user@yahoo.com"},
+                {"email": "user@hotmail.com"},
+                {"email": "user@aol.com"},
+            ],
+        )
+        pivots = _extract_deterministic_pivots(state)
+        assert len(pivots) == 3
+
+    def test_no_dehashed_result_returns_empty(self):
+        from agent.nodes import _extract_deterministic_pivots
+        from models.shared import InputClassification, PipelineState
+
+        state = PipelineState(
+            raw_input="user@gmail.com",
+            classifications=[
+                InputClassification(
+                    type="email", value="user@gmail.com", raw="user@gmail.com"
+                )
+            ],
+        )
+        assert _extract_deterministic_pivots(state) == []
 
 
 class TestToolResultEnvelope:

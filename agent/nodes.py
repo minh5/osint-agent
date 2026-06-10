@@ -11,7 +11,6 @@ from agent.prompts import ANALYSIS_PROMPT, CORRELATION_PROMPT
 from models.ai_audit import AiAuditInput
 from models.blackbird import BlackbirdInput
 from models.broker_scan import BrokerScanInput, BrokerScanOutput
-
 from models.ghunt import GHuntInput
 from models.hibp import HibpInput
 from models.holehe import HoleheInput
@@ -49,11 +48,11 @@ def _parse_json_tolerant(text: str) -> dict | list:
         pass
 
     # Extract outermost JSON object or array
-    for start_char, end_char in [('{', '}'), ('[', ']')]:
+    for start_char, end_char in [("{", "}"), ("[", "]")]:
         start = text.find(start_char)
         end = text.rfind(end_char)
         if start != -1 and end > start:
-            candidate = text[start:end + 1]
+            candidate = text[start : end + 1]
             # Also repair trailing commas in extracted fragment
             candidate = re.sub(r",\s*([\]}])", r"\1", candidate)
             try:
@@ -63,6 +62,8 @@ def _parse_json_tolerant(text: str) -> dict | list:
 
     # All attempts failed — raise original error for the caller to log
     raise json.JSONDecodeError("could not repair JSON", text, 0)
+
+
 PHONE_RE = re.compile(r"^[\d\s\-\(\)\+\.]{7,}$")
 
 SPIDERFOOT_TARGET_TYPE = {
@@ -421,7 +422,6 @@ def shodan_node(state: PipelineState) -> PipelineState:
     return state.model_copy(update={"shodan_result": aggregated})
 
 
-
 def ai_audit_node(state: PipelineState) -> PipelineState:
     from tools import ai_audit as audit_tool
 
@@ -497,6 +497,71 @@ def dehashed_node(state: PipelineState) -> PipelineState:
     else:
         logger.error("dehashed_node: FAILED — %s", result.error)
     return state.model_copy(update={"dehashed_result": result})
+
+
+def paste_node(state: PipelineState) -> PipelineState:
+    """Search psbdmp paste archives for credential dumps containing this email.
+
+    Surfaces email:password pairs posted to Pastebin and related sites —
+    often appears before HIBP ingests the breach (psbdmp indexes in near
+    real-time). No API key required.
+    """
+    from tools import paste as paste_tool
+
+    primary = next((c for c in state.classifications if c.type == "email"), None)
+    if not primary:
+        logger.info("paste_node: no email input, skipping")
+        return state
+
+    result = paste_tool.run(primary.value)
+    if result.success:
+        d = result.data
+        logger.info(
+            "paste_node: OK — pastes=%d credential_pastes=%d recent=%d plaintext=%d",
+            d.get("paste_count", 0),
+            d.get("credential_paste_count", 0),
+            d.get("recent_paste_count", 0),
+            d.get("plaintext_passwords_found", 0),
+        )
+    else:
+        logger.error("paste_node: FAILED — %s", result.error)
+    return state.model_copy(update={"paste_result": result})
+
+
+def stealer_node(state: PipelineState) -> PipelineState:
+    """Check Hudson Rock Cavalier for infostealer log hits.
+
+    Infostealer logs (RedLine, Vidar, Raccoon, etc.) are categorically more
+    severe than breach records: malware ran on the victim's machine and
+    exfiltrated ALL saved browser credentials, cookies, and session tokens —
+    not just one service's database. A hit here means an attacker may have
+    had live authenticated access to every service the victim was logged into.
+
+    Free, no API key required.
+    """
+    from tools import stealer as stealer_tool
+
+    primary = next((c for c in state.classifications if c.type == "email"), None)
+    if not primary:
+        logger.info("stealer_node: no email input, skipping")
+        return state
+
+    result = stealer_tool.run(primary.value)
+    if result.success:
+        d = result.data
+        if d.get("found"):
+            logger.info(
+                "stealer_node: OK — FOUND hits=%d families=%s earliest=%s latest=%s",
+                d.get("stealer_count", 0),
+                d.get("malware_families", []),
+                d.get("earliest_compromise", "?"),
+                d.get("latest_compromise", "?"),
+            )
+        else:
+            logger.info("stealer_node: OK — no infostealer hits")
+    else:
+        logger.error("stealer_node: FAILED — %s", result.error)
+    return state.model_copy(update={"stealer_result": result})
 
 
 def whoxy_node(state: PipelineState) -> PipelineState:
@@ -627,15 +692,60 @@ def _build_analysis_digest(state: PipelineState) -> str:
             dbs = d.get("unique_databases") or []
             if dbs:
                 lines.append(f"  Sources: {', '.join(dbs[:10])}")
-            usernames = d.get("unique_usernames") or []
+            usernames = _clean_handles(d.get("unique_usernames") or [])
             if usernames:
                 lines.append(f"  Usernames exposed: {', '.join(usernames[:10])}")
-            addresses = d.get("unique_addresses") or []
+            addresses = _clean_addresses(d.get("unique_addresses") or [])
             if addresses:
                 lines.append(f"  Physical addresses: {', '.join(addresses[:5])}")
             phones = d.get("unique_phones") or []
             if phones:
                 lines.append(f"  Phones in breach data: {', '.join(phones[:5])}")
+            lines.append("")
+
+    # ── Paste site credential dumps ───────────────────────────────────────────
+    if state.paste_result and state.paste_result.success:
+        d = state.paste_result.data
+        total = d.get("paste_count", 0)
+        if total:
+            lines.append(
+                f"PASTE SITES (HIBP): {total} paste(s) found — "
+                f"{d.get('recent_paste_count', 0)} posted within 90 days"
+            )
+            for entry in (d.get("pastes") or [])[:5]:
+                count_note = (
+                    f" — {entry.get('credential_count', 0)} addresses in paste"
+                    if entry.get("credential_count")
+                    else ""
+                )
+                lines.append(
+                    f"  - {entry.get('url')} ({entry.get('date')}){count_note}"
+                )
+            lines.append("")
+
+    # ── Infostealer logs (Hudson Rock) ────────────────────────────────────────
+    if state.stealer_result and state.stealer_result.success:
+        d = state.stealer_result.data
+        if d.get("found"):
+            lines.append(
+                f"INFOSTEALER LOGS (Hudson Rock): {d.get('stealer_count', 0)} hit(s) — "
+                f"CRITICAL: malware exfiltrated ALL browser credentials + session tokens"
+            )
+            lines.append(
+                f"  Malware families: {', '.join(d.get('malware_families') or [])}"
+            )
+            lines.append(
+                f"  Compromise window: {d.get('earliest_compromise', '?')} → {d.get('latest_compromise', '?')}"
+            )
+            for log in (d.get("logs") or [])[:3]:
+                lines.append(
+                    f"  - {log.get('malware_family')} on {log.get('computer_name')} "
+                    f"({log.get('date_compromised')}) — "
+                    f"{log.get('credential_count', 0)} credentials stolen"
+                )
+            lines.append("")
+        else:
+            lines.append("INFOSTEALER LOGS: no hits")
             lines.append("")
 
     # ── Whoxy reverse WHOIS ───────────────────────────────────────────────────
@@ -652,17 +762,31 @@ def _build_analysis_digest(state: PipelineState) -> str:
             domains = d.get("domains") or []
             for dom in domains[:10]:
                 expiry = dom.get("expiry_date", "")
-                status = "active" if expiry >= datetime.now(timezone.utc).date().isoformat() else "EXPIRED"
-                company = f" [{dom['registrant_company']}]" if dom.get("registrant_company") else ""
-                lines.append(f"  - {dom['domain_name']} ({status}, expires {expiry}){company}")
+                status = (
+                    "active"
+                    if expiry >= datetime.now(timezone.utc).date().isoformat()
+                    else "EXPIRED"
+                )
+                company = (
+                    f" [{dom['registrant_company']}]"
+                    if dom.get("registrant_company")
+                    else ""
+                )
+                lines.append(
+                    f"  - {dom['domain_name']} ({status}, expires {expiry}){company}"
+                )
             companies = d.get("unique_company_names") or []
             if companies:
-                lines.append(f"  Company names in registrant data: {', '.join(companies[:5])}")
-            addresses = d.get("unique_addresses") or []
+                lines.append(
+                    f"  Company names in registrant data: {', '.join(companies[:5])}"
+                )
+            addresses = _clean_addresses(d.get("unique_addresses") or [])
             if addresses:
                 lines.append(f"  Physical addresses: {', '.join(addresses[:3])}")
             if expired > 0:
-                lines.append(f"  ⚠ {expired} expired domain(s) — impersonation/typosquat risk")
+                lines.append(
+                    f"  ⚠ {expired} expired domain(s) — impersonation/typosquat risk"
+                )
             lines.append("")
 
     # ── Holehe registrations ──────────────────────────────────────────────────
@@ -707,6 +831,12 @@ def _build_analysis_digest(state: PipelineState) -> str:
             lines.append("GHUNT: Google account found")
             lines.append(f"  Name: {d.get('name', 'unknown')}")
             lines.append(f"  Services: {', '.join(d.get('google_services', []))}")
+            if d.get("maps_reviews_count"):
+                lines.append(
+                    f"  Google Maps reviews: {d['maps_reviews_count']} (public activity trail)"
+                )
+            if d.get("youtube_channel"):
+                lines.append(f"  YouTube channel: {d['youtube_channel']}")
         else:
             lines.append("GHUNT: not run (no credentials)")
         lines.append("")
@@ -734,8 +864,15 @@ def _build_analysis_digest(state: PipelineState) -> str:
                 by_type[el.get("type", "UNKNOWN")].append(val)
 
         # Exclude noisy/low-signal types that the LLM misreads as physical addresses
-        SKIP_TYPES = {"RAW_RIR_DATA", "GEOINFO", "COUNTRY_NAME", "PROVIDER_TELCO",
-                      "PHONE_PREFIX_OWNED", "NETBLOCK_OWNER", "BGP_AS_OWNER"}
+        SKIP_TYPES = {
+            "RAW_RIR_DATA",
+            "GEOINFO",
+            "COUNTRY_NAME",
+            "PROVIDER_TELCO",
+            "PHONE_PREFIX_OWNED",
+            "NETBLOCK_OWNER",
+            "BGP_AS_OWNER",
+        }
         lines.append(f"SPIDERFOOT: {d.get('element_count', 0)} elements")
         for etype, vals in list(by_type.items())[:10]:
             if etype in SKIP_TYPES:
@@ -807,7 +944,6 @@ def _build_analysis_digest(state: PipelineState) -> str:
                     f"jurisdiction={rec.get('jurisdiction')} | status={rec.get('status')}"
                 )
             lines.append("")
-
 
     # ── Correlation follow-up results ─────────────────────────────────────────
     if state.correlation_results:
@@ -904,16 +1040,18 @@ def wave1_scan_node(state: PipelineState) -> PipelineState:
     each other.  Running them in parallel reduces elapsed time from the sum of
     their runtimes to roughly the slowest single tool (usually SpiderFoot).
 
-    Wave 1: breach_check, dehashed, whoxy, phone_pivot, surface_map, holehe,
-            blackbird, maigret, ghunt
+    Wave 1: breach_check, dehashed, whoxy, paste, stealer, phone_pivot,
+            surface_map, holehe, blackbird, maigret, ghunt
     """
-    logger.info("wave1_scan_node: starting 9 tools in parallel")
+    logger.info("wave1_scan_node: starting 11 tools in parallel")
     result = _run_concurrent(
         state,
         [
             breach_check_node,
             dehashed_node,
             whoxy_node,
+            paste_node,
+            stealer_node,
             phone_pivot_node,
             surface_map_node,
             holehe_node,
@@ -948,18 +1086,95 @@ def wave2_scan_node(state: PipelineState) -> PipelineState:
     return result
 
 
+def _extract_deterministic_pivots(state: PipelineState) -> list[dict]:
+    """Extract high-confidence pivots that don't need LLM judgment.
+
+    Current rules:
+    1. DeHashed alternate emails — any email co-appearing in a breach record that
+       is NOT the original target:
+         - Gmail +alias variants (user+amazon@gmail.com) → HIBP for service-specific
+           breach exposure that the base-email search misses
+         - Different-domain alternates (user@comcast.net alongside user@gmail.com)
+           → full HIBP + Holehe footprint check
+
+    GHunt name → public records and broker scan are already handled deterministically
+    by Wave 2 via _resolve_name(); no need to re-add them here.
+    """
+    pivots: list[dict] = []
+    already_seen: set[str] = {c.value.lower() for c in state.classifications}
+
+    primary_email = next(
+        (c.value for c in state.classifications if c.type == "email"), None
+    )
+
+    if state.dehashed_result and state.dehashed_result.success and primary_email:
+        entries = state.dehashed_result.data.get("entries") or []
+        # Normalize base local-part: strip dots (Gmail treats them as equivalent)
+        base_local = primary_email.split("@")[0].lower().replace(".", "")
+
+        for entry in entries:
+            alt = (entry.get("email") or "").strip().lower()
+            if not alt or alt in already_seen:
+                continue
+            already_seen.add(alt)
+
+            alt_local = alt.split("@")[0].lower()
+            is_plus_variant = (
+                "+" in alt_local
+                and alt_local.split("+")[0].replace(".", "") == base_local
+            )
+
+            if is_plus_variant:
+                pivots.append(
+                    {
+                        "type": "email",
+                        "value": alt,
+                        "source": "dehashed",
+                        "reason": (
+                            f"Gmail +alias '{alt}' found in breach data — "
+                            "HIBP treats these as distinct; may surface additional service breaches"
+                        ),
+                    }
+                )
+            else:
+                # Different account co-appearing in the same breach record
+                pivots.append(
+                    {
+                        "type": "email",
+                        "value": alt,
+                        "source": "dehashed",
+                        "reason": (
+                            f"Alternate email '{alt}' co-appeared in breach record — "
+                            "check full breach history and active account footprint"
+                        ),
+                    }
+                )
+
+    return pivots[:3]  # cap at 3 to leave room for LLM pivots
+
+
 def correlation_planner_node(state: PipelineState) -> PipelineState:
     """Ask Ollama to identify follow-up pivots based on current scan findings.
 
-    Sends the compact digest to the LLM and parses a JSON list of up to 5 pivots.
+    First seeds the plan with deterministic high-value pivots (alternate emails
+    from DeHashed), then asks Ollama to fill the remaining slots (up to 5 total).
     Each pivot has: type (name/ip/username/phone/email), value, source, reason.
     Skips gracefully in TEST_MODE and on any LLM/parse failure.
     """
     logger.info("correlation_planner_node: asking Ollama to plan follow-up pivots")
 
+    # Always extract deterministic pivots regardless of mode
+    deterministic = _extract_deterministic_pivots(state)
+    if deterministic:
+        logger.info(
+            "correlation_planner_node: %d deterministic pivot(s): %s",
+            len(deterministic),
+            [(p["type"], p["value"]) for p in deterministic],
+        )
+
     if config.is_test_mode():
         # In test mode inject one deterministic pivot so the execute node is exercised
-        plan = [
+        plan = deterministic + [
             {
                 "type": "username",
                 "value": "jdoe92",
@@ -967,7 +1182,7 @@ def correlation_planner_node(state: PipelineState) -> PipelineState:
                 "reason": "Username found on multiple platforms — check full account footprint",
             }
         ]
-        return state.model_copy(update={"correlation_plan": plan})
+        return state.model_copy(update={"correlation_plan": plan[:5]})
 
     digest = _build_analysis_digest(state)
     if not digest.strip():
@@ -982,8 +1197,8 @@ def correlation_planner_node(state: PipelineState) -> PipelineState:
             base_url=config.get("OLLAMA_HOST"),
             temperature=0,
             request_timeout=120,
-            num_ctx=4096,    # CORRELATION_PROMPT + digest fits comfortably
-            num_predict=512, # small JSON array of ≤5 pivots
+            num_ctx=4096,  # CORRELATION_PROMPT + digest fits comfortably
+            num_predict=512,  # small JSON array of ≤5 pivots
         )
         response = llm.invoke([("system", CORRELATION_PROMPT), ("human", digest)])
         raw = (
@@ -1000,7 +1215,10 @@ def correlation_planner_node(state: PipelineState) -> PipelineState:
 
         # Attempt JSON parse with progressive repair for common LLM quirks
         data = _parse_json_tolerant(stripped)
-        pivots: list[dict] = data.get("pivots") or []
+        # _parse_json_tolerant may return a bare list; pivots live under a dict key
+        pivots: list[dict] = (
+            data.get("pivots") if isinstance(data, dict) else []
+        ) or []
 
         # Validate type and value presence
         valid_types = {"name", "ip", "username", "phone", "email"}
@@ -1021,7 +1239,7 @@ def correlation_planner_node(state: PipelineState) -> PipelineState:
                 digits = re.sub(r"\D", "", v)
                 if len(digits) < 10:
                     return False
-                if re.match(r"^(\d)\1+$", digits):      # all same digit: 1111111111
+                if re.match(r"^(\d)\1+$", digits):  # all same digit: 1111111111
                     return False
                 if re.match(r"^1?234567890?$", digits):  # 1234567890 placeholder
                     return False
@@ -1042,20 +1260,34 @@ def correlation_planner_node(state: PipelineState) -> PipelineState:
                     return False
             return True
 
-        pivots = [p for p in pivots if _is_real_value(p)][:5]
+        # Remove LLM suggestions that duplicate deterministic pivots
+        det_keys = {(p["type"], p["value"].lower()) for p in deterministic}
+        llm_pivots = [
+            p
+            for p in pivots
+            if _is_real_value(p) and (p["type"], p["value"].lower()) not in det_keys
+        ]
+
+        # Deterministic first, LLM fills remaining slots up to 5 total
+        remaining_slots = max(0, 5 - len(deterministic))
+        combined = deterministic + llm_pivots[:remaining_slots]
 
         logger.info(
-            "correlation_planner_node: planned %d pivots: %s",
-            len(pivots),
-            [(p["type"], p["value"]) for p in pivots],
+            "correlation_planner_node: planned %d pivot(s) (%d deterministic, %d llm): %s",
+            len(combined),
+            len(deterministic),
+            len(llm_pivots[:remaining_slots]),
+            [(p["type"], p["value"]) for p in combined],
         )
-        return state.model_copy(update={"correlation_plan": pivots})
+        return state.model_copy(update={"correlation_plan": combined})
 
     except Exception as exc:
         logger.warning(
-            "correlation_planner_node: failed (%s) — skipping correlation", exc
+            "correlation_planner_node: failed (%s) — using deterministic pivots only",
+            exc,
         )
-        return state
+        # LLM failed but deterministic pivots are still valid
+        return state.model_copy(update={"correlation_plan": deterministic})
 
 
 def correlation_execute_node(state: PipelineState) -> PipelineState:
@@ -1152,6 +1384,460 @@ def correlation_execute_node(state: PipelineState) -> PipelineState:
     return state.model_copy(update={"correlation_results": results})
 
 
+# ── Analysis post-processing ──────────────────────────────────────────────────
+# The local 8B model is unreliable at two things: emitting the full, deeply
+# nested remediation JSON (it silently drops sections), and honouring the
+# "items must be strings" contract (it returns objects instead). It also parrots
+# the few-shot example breach names. Everything below repairs the model's output
+# deterministically so the report is always complete and grounded in scan state.
+
+
+def _stringify(v: object) -> str:
+    """Best-effort coerce any JSON value the model returns into a flat string."""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, bool):
+        return str(v)
+    if isinstance(v, (int, float)):
+        return str(v)
+    if isinstance(v, list):
+        return ", ".join(_stringify(x) for x in v if x not in (None, "", []))
+    if isinstance(v, dict):
+        return ", ".join(f"{k}: {_stringify(val)}" for k, val in v.items() if val)
+    return str(v) if v is not None else ""
+
+
+_HANDLE_NOISE = {
+    "1",
+    "na",
+    "n/a",
+    "none",
+    "null",
+    "unknown",
+    "true",
+    "false",
+    "target",
+    "person",
+    "user",
+    "username",
+    "email",
+}
+
+
+# 16+ hex chars = a hash or DB id (e.g. Mongo ObjectId), not a username.
+_HASH_LIKE = re.compile(r"^[0-9a-f]{16,}$", re.IGNORECASE)
+
+
+def _clean_handles(handles: list) -> list[str]:
+    """Drop junk usernames and dedupe.
+
+    DeHashed's v2 normalizer packs multiple values into one comma-joined string
+    (e.g. ``"rmilo12648, 1"``), so each entry is first split on commas before
+    filtering. Rejects: too-short, all-digits, hash/DB-id-like hex blobs, and
+    placeholder noise words.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for h in handles or []:
+        for token in _stringify(h).split(","):
+            s = token.strip()
+            if len(s) < 3 or s.isdigit() or s.lower() in _HANDLE_NOISE:
+                continue
+            if _HASH_LIKE.match(s):
+                continue
+            if s.lower() in seen:
+                continue
+            seen.add(s.lower())
+            out.append(s)
+    return out
+
+
+def _looks_like_street_address(s: str) -> bool:
+    """True only for real street addresses — rejects raw GEOINFO fragments like
+    'US, san diego ca us 92115' that have no street number."""
+    s = (s or "").strip()
+    if not s:
+        return False
+    if re.search(r"\b\d{1,6}\s+[A-Za-z]", s):  # street number followed by a word
+        return True
+    return "po box" in s.lower()
+
+
+def _clean_addresses(addrs: list) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for a in addrs or []:
+        s = _stringify(a).strip()
+        if not _looks_like_street_address(s) or s.lower() in seen:
+            continue
+        seen.add(s.lower())
+        out.append(s)
+    return out
+
+
+_BOGUS_URL_MARKERS = ("api.", "/api/", "email_available", "/lookup", "/users/lookup")
+
+
+def _clean_url(url: str) -> str:
+    """Drop internal probe endpoints (Holehe/Blackbird API URLs) — they are not
+    a user-facing profile and are misleading in a report."""
+    u = (url or "").strip()
+    if not u or any(m in u.lower() for m in _BOGUS_URL_MARKERS):
+        return ""
+    return u
+
+
+def _known_platform_item(item: object) -> str:
+    if isinstance(item, dict):
+        name = (
+            item.get("PlatformName") or item.get("platform") or item.get("name") or ""
+        )
+        url = _clean_url(item.get("url") or item.get("URL") or "")
+        return f"{name}: {url}" if (name and url) else (name or _stringify(item))
+    return _stringify(item)
+
+
+def _known_credential_item(item: object) -> str:
+    if isinstance(item, dict):
+        name = (
+            item.get("BreachName") or item.get("name") or item.get("ServiceName") or ""
+        )
+        year = str(
+            item.get("YYYY") or item.get("year") or item.get("breach_date") or ""
+        )[:4]
+        types = item.get("data_types") or item.get("data_classes") or []
+        types_s = ", ".join(types) if isinstance(types, list) else _stringify(types)
+        head = f"{name} ({year})" if year else name
+        return f"{head} — {types_s}" if types_s else head
+    return _stringify(item)
+
+
+def _known_breach_item(item: object) -> str:
+    if isinstance(item, dict):
+        name = (
+            item.get("ServiceName") or item.get("BreachName") or item.get("name") or ""
+        )
+        year = str(
+            item.get("YYYY") or item.get("year") or item.get("breach_date") or ""
+        )[:4]
+        return f"{name} ({year})" if year else name
+    return _stringify(item)
+
+
+def _known_google_item(item: object) -> str:
+    if isinstance(item, dict):
+        svc = (
+            item.get("Google service") or item.get("service") or item.get("name") or ""
+        )
+        url = _clean_url(item.get("url") or "")
+        return f"{svc}: {url}" if (svc and url) else (svc or _stringify(item))
+    return _stringify(item)
+
+
+def _normalize_what_is_known(known: dict) -> dict:
+    """Coerce every what_is_known item to a clean string and strip noise."""
+    known = dict(known or {})
+    known["handles_and_usernames"] = _clean_handles(
+        known.get("handles_and_usernames") or []
+    )
+    known["physical_data"] = _clean_addresses(known.get("physical_data") or [])
+    for key, fn in (
+        ("platforms_with_accounts", _known_platform_item),
+        ("credentials_exposed", _known_credential_item),
+        ("breach_history", _known_breach_item),
+        ("google_footprint", _known_google_item),
+    ):
+        known[key] = [s for s in (fn(i) for i in (known.get(key) or [])) if s.strip()]
+    return known
+
+
+# Verbatim brand names that only ever appear in the prompt's few-shot examples.
+# If the model emits one of these and the breach isn't actually in scan state,
+# it's a hallucinated parroting of the example — drop it.
+_EXAMPLE_LEAK_TOKENS = ("parkmobile", "luminpdf", "lumin pdf", "pdl breach")
+
+
+def _real_breach_names(state: PipelineState) -> set[str]:
+    names: set[str] = set()
+    if state.hibp_result and state.hibp_result.success:
+        for b in state.hibp_result.data.get("breaches") or []:
+            n = (b.get("name") or "").lower()
+            if n:
+                names.add(n)
+    if state.dehashed_result and state.dehashed_result.success:
+        for db in state.dehashed_result.data.get("unique_databases") or []:
+            if db:
+                names.add(str(db).lower())
+    return names
+
+
+def _filter_top_risks(risks: list, state: PipelineState) -> list[str]:
+    real = _real_breach_names(state)
+    out: list[str] = []
+    for r in risks or []:
+        s = _stringify(r).strip()
+        if not s:
+            continue
+        low = s.lower()
+        leaked = any(tok in low for tok in _EXAMPLE_LEAK_TOKENS)
+        grounded = any(name in low for name in real)
+        if leaked and not grounded:
+            logger.info("analysis: dropping hallucinated top_risk: %s", s[:80])
+            continue
+        out.append(s)
+    return out[:5]
+
+
+def _active_accounts(state: PipelineState) -> list[str]:
+    """Confirmed active accounts — only platforms found by Holehe or Blackbird."""
+    seen: set[str] = set()
+    names: list[str] = []
+
+    def add(n: str) -> None:
+        n = (n or "").strip()
+        if n and n.lower() not in seen:
+            seen.add(n.lower())
+            names.append(n)
+
+    if state.holehe_result and state.holehe_result.success:
+        for p in state.holehe_result.data.get("platforms_found") or []:
+            add(p.get("platform", ""))
+    if state.blackbird_result and state.blackbird_result.success:
+        for a in state.blackbird_result.data.get("accounts_found") or []:
+            add(a.get("platform", ""))
+    return names
+
+
+def _password_breaches(state: PipelineState) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    if state.hibp_result and state.hibp_result.success:
+        for b in state.hibp_result.data.get("breaches") or []:
+            classes = [str(c).lower() for c in (b.get("data_classes") or [])]
+            if any("password" in c for c in classes):
+                name = b.get("name", "")
+                year = str(b.get("breach_date") or "")[:4]
+                label = f"{name} ({year})" if year else name
+                if label and label.lower() not in seen:
+                    seen.add(label.lower())
+                    out.append(label)
+    return out
+
+
+def _has_address(state: PipelineState) -> bool:
+    for res in (state.dehashed_result, state.whoxy_result):
+        if res and res.success and res.data.get("unique_addresses"):
+            return True
+    return False
+
+
+_REMEDIATION_KEYS = [
+    "change_passwords",
+    "enable_2fa",
+    "account_hygiene",
+    "credit_freeze",
+    "identity_fraud_prevention",
+    "sim_swap_hardening",
+    "account_reviews",
+    "gdpr_removals",
+    "ccpa_removals",
+    "broker_optouts",
+    "monitoring",
+    "no_action_available",
+]
+
+
+def _build_deterministic_remediation(state: PipelineState) -> dict[str, list[str]]:
+    """Generate action items directly from scan state.
+
+    These are rule-based, not reasoning — so we compute them in Python rather
+    than trusting the 8B model, which drops sections and hallucinates. This is
+    what guarantees the report is never sparse.
+    """
+    rem: dict[str, list[str]] = {}
+
+    pw_breaches = _password_breaches(state)
+    dh = (
+        state.dehashed_result.data
+        if (state.dehashed_result and state.dehashed_result.success)
+        else {}
+    )
+    dh_pw = (dh.get("plaintext_password_count") or 0) + (
+        dh.get("hashed_password_count") or 0
+    )
+    if pw_breaches:
+        rem["change_passwords"] = [
+            f"Passwords were exposed in: {', '.join(pw_breaches[:15])}. Change them "
+            "everywhere — and on any other site where you reused the same password."
+        ]
+    elif dh_pw:
+        rem["change_passwords"] = [
+            f"{dh_pw} password(s) tied to your accounts appear in breach dumps — "
+            "change them and any site where you reused the same password."
+        ]
+
+    accounts = _active_accounts(state)
+    if accounts:
+        rem["enable_2fa"] = [
+            "Enable 2FA (prefer an authenticator app over SMS) on: "
+            + ", ".join(accounts[:25])
+        ]
+        rem["account_reviews"] = [
+            "Review privacy/visibility settings on: "
+            + ", ".join(accounts[:25])
+            + " — set profiles to private, remove any public phone number, and "
+            "disable 'allow search engines to index my profile'."
+        ]
+
+    stealer_found = bool(
+        state.stealer_result
+        and state.stealer_result.success
+        and state.stealer_result.data.get("found")
+    )
+
+    hygiene = [
+        "Revoke unused OAuth app access: Google (myaccount.google.com/permissions), "
+        "Facebook, Twitter/X, GitHub — remove any app you no longer use.",
+        "Audit active sessions for unrecognized devices: Google "
+        "(myaccount.google.com/device-activity), Apple ID, and Microsoft.",
+    ]
+    if stealer_found:
+        hygiene.insert(
+            0,
+            "Infostealer malware exfiltrated your entire browser credential store — "
+            "change ALL saved passwords now, move to a password manager "
+            "(Bitwarden/1Password) with unique passwords, and sign out of every "
+            "session everywhere (the attacker may hold live session cookies).",
+        )
+    rem["account_hygiene"] = hygiene
+
+    breach_count = (
+        state.hibp_result.data.get("breach_count", 0)
+        if (state.hibp_result and state.hibp_result.success)
+        else 0
+    )
+    broker_count = (
+        state.broker_result.data.get("brokers_found_count", 0)
+        if (state.broker_result and state.broker_result.success)
+        else 0
+    )
+    has_addr = _has_address(state)
+
+    if breach_count or broker_count or has_addr:
+        rem["credit_freeze"] = [
+            "Freeze your credit at all bureaus to block unauthorized credit/loan "
+            "applications: Equifax (equifax.com/freeze), Experian "
+            "(experian.com/freeze), TransUnion (transunion.com/freeze), Innovis "
+            "(innovis.com/freeze). Also freeze ChexSystems (chexsystems.com, "
+            "protects bank accounts) and LexisNexis (optout.lexisnexis.com)."
+        ]
+
+    if has_addr or stealer_found or breach_count:
+        rem["identity_fraud_prevention"] = [
+            "Get an IRS Identity Protection PIN at "
+            "irs.gov/identity-theft-fraud-scams/get-an-identity-protection-pin — "
+            "blocks fraudulent tax filings in your name. Free, renews annually.",
+            "Lock your SSN in E-Verify at myeverify.uscis.gov — stops your SSN "
+            "being used to pass employment eligibility checks. Free.",
+            "Enroll in USPS Informed Delivery at informeddelivery.usps.com — "
+            "preview incoming mail and catch mail-redirect fraud early.",
+        ]
+
+    phone_valid = bool(
+        state.phone_result
+        and state.phone_result.success
+        and state.phone_result.data.get("valid")
+    )
+    if phone_valid or stealer_found:
+        rem["sim_swap_hardening"] = [
+            "Add a verbal passcode / port-freeze with your mobile carrier (AT&T, "
+            "Verizon, and T-Mobile all support this) to block SIM-swap attacks.",
+            "Remove your phone number from account recovery on Facebook, Twitter/X, "
+            "and Google — replace SMS 2FA with an authenticator app.",
+        ]
+
+    if broker_count or has_addr:
+        rem["broker_optouts"] = [
+            "Use EasyOptOuts (easyoptouts.com, ~$20/year) to automate removal from "
+            "Spokeo, Whitepages, BeenVerified, Radaris, and 100+ brokers. Profiles "
+            "re-populate every ~90 days, so keep the subscription active."
+        ]
+
+    # Always applicable — this is the section the model most often dropped.
+    rem["monitoring"] = [
+        "Sign up for free breach monitoring at haveibeenpwned.com to be alerted to "
+        "future breaches immediately.",
+        "Set Google Alerts (google.com/alerts) for your full name, phone number, and "
+        "home address to catch new public appearances.",
+        "Re-run data-broker opt-outs every 90 days — profiles re-populate "
+        "automatically from public records (voter rolls, property, court filings).",
+        "Review active OAuth app permissions quarterly: Google, Facebook, Twitter/X, "
+        "and GitHub.",
+    ]
+
+    return rem
+
+
+def _stringify_rem_item(item: object) -> str:
+    """Coerce a remediation item the model returned as an object into a string."""
+    if isinstance(item, dict):
+        if item.get("action"):
+            plats = _stringify(item.get("platforms"))
+            return f"{item['action']}: {plats}" if plats else str(item["action"])
+        service = item.get("service") or item.get("name") or ""
+        how = item.get("how_to_remove") or item.get("url") or ""
+        if service and how:
+            return f"{service}: {how}"
+        return service or _stringify(item)
+    return _stringify(item)
+
+
+def _finalize_remediation(state: PipelineState, llm_rem: dict) -> dict:
+    """Deterministic sections win when present; otherwise fall back to the
+    (normalized) model output. Guarantees no empty/object items reach the report."""
+    llm_rem = dict(llm_rem or {})
+    deterministic = _build_deterministic_remediation(state)
+    final: dict[str, list[str]] = {}
+    for key in _REMEDIATION_KEYS:
+        if deterministic.get(key):
+            final[key] = deterministic[key]
+        else:
+            items = llm_rem.get(key) or []
+            final[key] = [
+                s for s in (_stringify_rem_item(i) for i in items) if s.strip()
+            ]
+    return final
+
+
+def _postprocess_analysis(state: PipelineState, analysis: dict) -> dict:
+    """Repair and complete the model's analysis before it reaches the report."""
+    analysis = dict(analysis)
+    analysis["what_is_known"] = _normalize_what_is_known(
+        analysis.get("what_is_known") or {}
+    )
+    analysis["top_risks"] = _filter_top_risks(analysis.get("top_risks") or [], state)
+    analysis["remediation"] = _finalize_remediation(
+        state, analysis.get("remediation") or {}
+    )
+    return analysis
+
+
+def _validate_analysis(analysis: dict) -> None:
+    """Hard schema contract for the post-processed analysis.
+
+    `_postprocess_analysis` already normalizes every shape and builds remediation
+    deterministically, so a failure here means the model omitted a core narrative
+    field it alone is responsible for (overall_risk_score / overall_risk_level /
+    identity_summary / top_risks). We fail loudly rather than emit a degraded
+    report. Raises ``pydantic.ValidationError``.
+    """
+    try:
+        AnalysisResult(**analysis)
+    except Exception as exc:
+        logger.error("analysis_node: analysis failed schema validation — %s", exc)
+        raise
+
+
 def analysis_node(state: PipelineState) -> PipelineState:
     logger.info("analysis_node: synthesizing results with Ollama")
 
@@ -1177,8 +1863,8 @@ def analysis_node(state: PipelineState) -> PipelineState:
             base_url=config.get("OLLAMA_HOST"),
             temperature=0,
             request_timeout=300,  # 5 min hard cap
-            num_ctx=8192,         # ANALYSIS_PROMPT alone is ~2300 tokens; default 2048 truncates the prompt
-            num_predict=4096,     # full remediation + findings_context JSON needs ~2000-3000 tokens
+            num_ctx=8192,  # ANALYSIS_PROMPT alone is ~2300 tokens; default 2048 truncates the prompt
+            num_predict=4096,  # full remediation + findings_context JSON needs ~2000-3000 tokens
         )
         messages = [
             ("system", ANALYSIS_PROMPT),
@@ -1203,23 +1889,6 @@ def analysis_node(state: PipelineState) -> PipelineState:
             raise json.JSONDecodeError("empty response from model", "", 0)
 
         analysis = json.loads(stripped)
-        # Validate schema but don't discard the result if fields are missing —
-        # the report uses analysis as a raw dict and handles missing keys with .get()
-        try:
-            AnalysisResult(**analysis)
-        except Exception as val_exc:
-            logger.warning(
-                "analysis_node: schema mismatch (continuing anyway): %s", val_exc
-            )
-        # Enrich findings_context with real URLs from the static privacy DB.
-        # The LLM is instructed to set how_to_remove=null; we inject verified
-        # deletion URLs + correct legal frameworks here.
-        findings = analysis.get("findings_context")
-        if isinstance(findings, list):
-            from tools.privacy_url_lookup import enrich_findings_context
-
-            analysis["findings_context"] = enrich_findings_context(findings)
-        return state.model_copy(update={"analysis_result": analysis})
 
     except json.JSONDecodeError as exc:
         logger.error("analysis_node: failed to parse Ollama JSON response: %s", exc)
@@ -1251,6 +1920,25 @@ def analysis_node(state: PipelineState) -> PipelineState:
             "error": str(exc),
         }
         return state.model_copy(update={"analysis_result": error_result})
+
+    # ── Hard contract (runs only on a successfully parsed response) ────────────
+    # LLM/network/JSON failures above degrade gracefully; from here on the output
+    # is OUR responsibility. Repair shapes + build remediation deterministically,
+    # then enforce the schema as a hard contract — a violation means the model
+    # dropped a core narrative field, and we fail loudly rather than ship a broken
+    # report. These steps are intentionally outside the soft-fallback try.
+    analysis = _postprocess_analysis(state, analysis)
+    _validate_analysis(analysis)
+
+    # Enrich findings_context with real URLs from the static privacy DB. The LLM
+    # is instructed to set how_to_remove=null; we inject verified deletion URLs +
+    # correct legal frameworks here.
+    findings = analysis.get("findings_context")
+    if isinstance(findings, list):
+        from tools.privacy_url_lookup import enrich_findings_context
+
+        analysis["findings_context"] = enrich_findings_context(findings)
+    return state.model_copy(update={"analysis_result": analysis})
 
 
 def report_node(state: PipelineState) -> PipelineState:

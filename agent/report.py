@@ -2,7 +2,6 @@ import json
 import logging
 import re
 import uuid
-from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -10,15 +9,25 @@ import config
 from models.shared import PipelineState
 
 
-def _rem_item(item) -> str:
-    """Normalize a remediation list item — LLM sometimes returns dicts instead of strings."""
+def _rem_item(item: object) -> str:
+    """Normalize a remediation list item — LLM sometimes returns dicts instead of strings.
+
+    nodes._postprocess_analysis already coerces these upstream; this is a
+    defensive net for the TEST_MODE fixture path and any stray dict shapes.
+    """
     if isinstance(item, dict):
+        if item.get("action"):
+            plats = item.get("platforms")
+            if isinstance(plats, list):
+                plats = ", ".join(str(p) for p in plats if p)
+            return f"{item['action']}: {plats}" if plats else str(item["action"])
         service = item.get("service") or item.get("name") or ""
         how = item.get("how_to_remove") or item.get("url") or ""
-        if how:
+        if service and how:
             return f"{service}: {how}"
-        return service
+        return service or ""
     return str(item)
+
 
 _BAZZELL_DB_PATH = Path(__file__).parent.parent / "data" / "bazzell_brokers.json"
 
@@ -55,7 +64,9 @@ def _risk_colour(level: str) -> tuple:
     return _GREEN
 
 
-def _write_pdf(pdf_path: Path, state: PipelineState, analysis: dict, run_id: str = "") -> None:
+def _write_pdf(
+    pdf_path: Path, state: PipelineState, analysis: dict, run_id: str = ""
+) -> None:
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_CENTER
     from reportlab.lib.pagesizes import A4
@@ -458,6 +469,25 @@ def _write_pdf(pdf_path: Path, state: PipelineState, analysis: dict, run_id: str
         ),
     )
     _tr(
+        "Paste sites",
+        state.paste_result,
+        lambda d: (
+            f"{d.get('paste_count',0)} pastes — "
+            f"{d.get('credential_paste_count',0)} with credentials, "
+            f"{d.get('recent_paste_count',0)} recent"
+        ),
+    )
+    _tr(
+        "Infostealer logs",
+        state.stealer_result,
+        lambda d: (
+            f"{d.get('stealer_count',0)} hit(s) — "
+            f"{', '.join(d.get('malware_families') or []) or 'none'}"
+            if d.get("found")
+            else "no hits"
+        ),
+    )
+    _tr(
         "Blackbird",
         state.blackbird_result,
         lambda d: f"{d.get('found_count',0)} accounts",
@@ -502,8 +532,8 @@ def _write_pdf(pdf_path: Path, state: PipelineState, analysis: dict, run_id: str
         "Phone Lookup",
         state.phone_result,
         lambda d: (
-            f"valid={d.get('valid')} {d.get('line_type','?')} "
-            f"via {(d.get('carrier') or {}).get('name','?')}"
+            f"valid={d.get('valid')} {d.get('line_type') or 'unknown'} "
+            f"via {(d.get('carrier') or {}).get('name') or 'unknown carrier'}"
             if d.get("valid")
             else "invalid / no key"
         ),
@@ -592,7 +622,7 @@ def write_report(state: PipelineState) -> str:
     primary = state.classifications[0] if state.classifications else None
     identifier = _build_identifier(state)
     date_str = datetime.now().strftime("%Y-%m-%d")
-    run_id = str(uuid.uuid4())[:8]   # short UUID — 8 hex chars is unambiguous enough
+    run_id = str(uuid.uuid4())[:8]  # short UUID — 8 hex chars is unambiguous enough
     base_name = f"{identifier}_{date_str}_{run_id}"
 
     json_path = output_dir / f"{base_name}.json"
@@ -809,6 +839,38 @@ def write_report(state: PipelineState) -> str:
                 f"{d.get('active_domain_count',0)} active, "
                 f"{d.get('expired_domain_count',0)} expired"
             )
+    if state.paste_result and state.paste_result.success:
+        d = state.paste_result.data
+        if d.get("paste_count", 0):
+            lines.append(
+                f"- **Paste sites:** {d.get('paste_count',0)} pastes — "
+                f"{d.get('recent_paste_count',0)} posted within 90 days"
+            )
+            for entry in d.get("pastes") or []:
+                count_note = (
+                    f" — {entry.get('credential_count',0)} addresses"
+                    if entry.get("credential_count")
+                    else ""
+                )
+                lines.append(
+                    f"  - [{entry.get('paste_id')}]({entry.get('url')}) "
+                    f"({entry.get('date')}){count_note}"
+                )
+    if state.stealer_result and state.stealer_result.success:
+        d = state.stealer_result.data
+        if d.get("found"):
+            families = ", ".join(d.get("malware_families") or [])
+            lines.append(
+                f"- **Infostealer logs:** {d.get('stealer_count',0)} hit(s) "
+                f"— {families} "
+                f"({d.get('earliest_compromise','?')} → {d.get('latest_compromise','?')})"
+            )
+            for log in d.get("logs") or []:
+                lines.append(
+                    f"  - {log.get('malware_family')} on `{log.get('computer_name')}` "
+                    f"({log.get('date_compromised')}) — "
+                    f"{log.get('credential_count',0)} credentials stolen"
+                )
     if state.blackbird_result and state.blackbird_result.success:
         lines.append(
             f"- **Blackbird:** {state.blackbird_result.data.get('found_count',0)} accounts found"
@@ -844,7 +906,9 @@ def write_report(state: PipelineState) -> str:
     ):
         d = state.phone_result.data
         carrier_name = (d.get("carrier") or {}).get("name") or "unknown carrier"
-        location = d.get("geocode") or d.get("location") or d.get("country_code") or "unknown"
+        location = (
+            d.get("geocode") or d.get("location") or d.get("country_code") or "unknown"
+        )
         voip_tag = " ⚠ VoIP" if d.get("is_voip") else ""
         lines.append(
             f"- **Phone:** {d.get('line_type','?')}{voip_tag} via {carrier_name}, "

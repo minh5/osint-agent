@@ -42,17 +42,17 @@ NUMVERIFY_URL = "http://apilayer.net/api/validate"
 # Maps phonenumbers library line-type constants to our Literal values
 _LINE_TYPE_MAP = {
     0: "mobile",
-    1: "landline",   # FIXED_LINE
-    2: "mobile",     # FIXED_LINE_OR_MOBILE (conservative: treat as mobile)
-    3: "unknown",    # TOLL_FREE
-    4: "prepaid",    # PREMIUM_RATE (closest approximation)
-    5: "unknown",    # SHARED_COST
-    6: "voip",       # VOIP
-    7: "unknown",    # PERSONAL_NUMBER
-    8: "unknown",    # PAGER
-    9: "unknown",    # UAN
-    10: "unknown",   # VOICEMAIL
-    99: "unknown",   # UNKNOWN
+    1: "landline",  # FIXED_LINE
+    2: "mobile",  # FIXED_LINE_OR_MOBILE (conservative: treat as mobile)
+    3: "unknown",  # TOLL_FREE
+    4: "prepaid",  # PREMIUM_RATE (closest approximation)
+    5: "unknown",  # SHARED_COST
+    6: "voip",  # VOIP
+    7: "unknown",  # PERSONAL_NUMBER
+    8: "unknown",  # PAGER
+    9: "unknown",  # UAN
+    10: "unknown",  # VOICEMAIL
+    99: "unknown",  # UNKNOWN
 }
 
 
@@ -68,7 +68,8 @@ def _lookup_phonenumbers(phone: str) -> PhoneLookupOutput:
     """Layer 1: free offline lookup using Google's libphonenumber."""
     try:
         import phonenumbers
-        from phonenumbers import carrier, geocoder, timezone as pn_tz
+        from phonenumbers import carrier, geocoder
+        from phonenumbers import timezone as pn_tz
 
         parsed = phonenumbers.parse(phone)
         valid = phonenumbers.is_valid_number(parsed)
@@ -100,8 +101,15 @@ def _lookup_phonenumbers(phone: str) -> PhoneLookupOutput:
 
         carrier_info: PhoneCarrierInfo | None = None
         if carrier_name:
-            ctype = line_type if line_type in ("mobile", "landline", "voip", "prepaid") else "unknown"
-            carrier_info = PhoneCarrierInfo(name=carrier_name, type=ctype)  # type: ignore[arg-type]
+            ctype = (
+                line_type
+                if line_type in ("mobile", "landline", "voip", "prepaid")
+                else "unknown"
+            )
+            carrier_info = PhoneCarrierInfo(
+                name=carrier_name,
+                type=ctype,  # type: ignore[arg-type]
+            )
 
         return PhoneLookupOutput(
             phone=e164,
@@ -143,7 +151,9 @@ def _supplement_numverify(output: PhoneLookupOutput, api_key: str) -> PhoneLooku
 
         if not data.get("valid") and "error" in data:
             err = data["error"].get("info", "unknown error")
-            logger.warning("phone_lookup: Numverify error — %s (using phonenumbers baseline)", err)
+            logger.warning(
+                "phone_lookup: Numverify error — %s (using phonenumbers baseline)", err
+            )
             return output
 
         # Merge real-time fields on top of offline baseline
@@ -154,19 +164,32 @@ def _supplement_numverify(output: PhoneLookupOutput, api_key: str) -> PhoneLooku
 
         carrier_info: PhoneCarrierInfo | None = output.carrier
         if nv_carrier:
-            ctype = nv_line_type if nv_line_type in ("mobile", "landline", "voip", "prepaid") else "unknown"
-            carrier_info = PhoneCarrierInfo(name=nv_carrier, type=ctype)  # type: ignore[arg-type]
+            ctype = (
+                nv_line_type
+                if nv_line_type in ("mobile", "landline", "voip", "prepaid")
+                else "unknown"
+            )
+            carrier_info = PhoneCarrierInfo(
+                name=nv_carrier,
+                type=ctype,  # type: ignore[arg-type]
+            )
 
-        return output.model_copy(update={
-            "carrier": carrier_info,
-            "line_type": nv_line_type or output.line_type,
-            "country_name": data.get("country_name") or output.country_name,
-            "location": data.get("location") or output.location,
-            "is_voip": (nv_line_type == "voip"),
-        })
+        return output.model_copy(
+            update={
+                "carrier": carrier_info,
+                "line_type": nv_line_type or output.line_type,
+                "country_name": data.get("country_name") or output.country_name,
+                "location": data.get("location") or output.location,
+                "is_voip": (nv_line_type == "voip"),
+            }
+        )
 
     except Exception as exc:
-        logger.warning("phone_lookup: Numverify supplement failed — %s (using phonenumbers baseline)", exc)
+        logger.warning(
+            "phone_lookup: Numverify supplement failed — %s "
+            "(using phonenumbers baseline)",
+            exc,
+        )
         return output
 
 
@@ -175,6 +198,7 @@ def run(inp: PhoneInput) -> ToolResult:
 
     if config.is_test_mode():
         import json
+
         raw = json.loads(FIXTURE_PATH.read_text())
         return ToolResult(**raw)
 

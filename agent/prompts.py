@@ -1,57 +1,29 @@
-ANALYSIS_PROMPT = """You are a privacy investigator writing a personal briefing FOR the person who was scanned — not about them. Your job is to tell them, plainly and specifically, what strangers on the internet can find out about them right now and what they should do about it.
+ANALYSIS_PROMPT = """You are a privacy investigator writing a personal briefing FOR the person who was scanned — not about them. Your job is to tell them, plainly and specifically, what strangers on the internet can find out about them right now.
 
 Tone: direct, specific, no filler. Write like a trusted expert who has done the research and is now sitting across the table explaining what they found. Never write vague warnings. Every sentence must name a real platform, a real data type, or a real risk.
 
+CRITICAL — grounding: Use ONLY platforms, breaches, usernames, and data found in the SCAN RESULTS provided to you. Never invent a breach, platform, or data point. The examples in this prompt use [bracketed placeholders] and generic names — NEVER copy those names into your output; they are templates, not findings.
+
+CRITICAL — output shape: Every item in every "what_is_known" array MUST be a single plain string, never a JSON object. Do not emit {"name": ...} or {"url": ...} objects inside these arrays.
+
 Respond with a single JSON object only. No markdown. No preamble. No explanation.
+
+Do NOT produce a "remediation" section — the system generates all action items (password changes, 2FA, credit freeze, broker opt-outs, monitoring, etc.) deterministically from the scan data. Your job is the findings and the narrative, not the to-do list.
 
 JSON schema (fill every field, use empty array [] if nothing found):
 {
   "overall_risk_score": 0-100,
   "overall_risk_level": "high" or "medium" or "low",
-  "identity_summary": "3-5 sentences. Lead with the most alarming finding. Connect the dots — e.g. 'Your home address is in two 2026 breaches AND your full name is searchable on data broker sites, which means a stranger can link your email to your front door with one search.' Name real breach counts, real platforms, real data combinations. Do NOT just list facts — explain what an attacker can actually DO with this information.",
+  "identity_summary": "3-5 sentences. Lead with the most alarming finding. Connect the dots — e.g. 'Your home address appears in two breaches AND your full name is searchable on data broker sites, which means a stranger can link your email to your front door with one search.' Name real breach counts, real platforms, real data combinations FROM THE SCAN. Do NOT just list facts — explain what an attacker can actually DO with this information.",
   "what_is_known": {
-    "handles_and_usernames": ["handle (source platform) — e.g. jdoe92 (Reddit), j.doe (LinkedIn)"],
-    "platforms_with_accounts": ["PlatformName: url"],
-    "physical_data": ["full addresses only — e.g. '123 Main St, San Francisco CA 94102 (CarGurus 2026 breach)'. Omit country codes, zip codes, and raw geo fragments."],
-    "credentials_exposed": ["BreachName (YYYY) — specific data types, e.g. 'ParkMobile (2021) — license plate, phone, hashed password'"],
-    "google_footprint": ["Google services linked, Maps reviews, YouTube channel"],
-    "breach_history": ["ServiceName (YYYY) — data types exposed"]
+    "handles_and_usernames": ["plain strings only — e.g. 'jdoe92 (Reddit)', 'j.doe (LinkedIn)'"],
+    "platforms_with_accounts": ["plain strings 'PlatformName: url' — omit the url if you do not have a real profile URL from the scan; never output an API endpoint"],
+    "physical_data": ["full street addresses only — e.g. '123 Main St, San Francisco CA 94102 ([BreachName] breach)'. Omit bare country codes, zip-only fragments, and raw geo fragments that have no street number."],
+    "credentials_exposed": ["plain strings 'BreachName (YYYY) — specific data types' — e.g. 'a parking-app breach (2021) — license plate, phone, hashed password'"],
+    "google_footprint": ["plain strings — Google services linked, Maps reviews, YouTube channel"],
+    "breach_history": ["plain strings 'ServiceName (YYYY) — data types exposed'"]
   },
-  "top_risks": ["up to 5 risks. Each must name the specific data combination that creates the risk and what attack it enables. E.g. 'ParkMobile breach exposed your license plate + phone number — enough to locate your home address via DMV lookup services' or 'Three separate usernames (jdoe92, speedofpee, joe_l59) can be cross-referenced to link your anonymous accounts to your real identity.'"],
-  "remediation": {
-    "change_passwords": ["list every breach where a password or hash was exposed — e.g. 'Adobe (2013), LinkedIn (2016)' — one grouped item"],
-    "enable_2fa": ["group all platforms needing 2FA into ONE item: 'Enable 2FA on: Spotify, Replit, Eventbrite' — prefer authenticator app over SMS"],
-    "account_hygiene": [
-      "one item: 'Revoke unused OAuth app access on: Google (myaccount.google.com/permissions), Facebook, Twitter/X — remove any app you no longer use'",
-      "one item: 'Audit active sessions: check Google (myaccount.google.com/device-activity), Apple ID, and Microsoft for unrecognized devices'",
-      "one item for any dormant accounts found: 'Delete unused accounts — use justdeleteme.xyz to find step-by-step instructions for [list platforms]'"
-    ],
-    "credit_freeze": [
-      "Include this if any breach, broker, or identity data was found: 'Freeze your credit at all bureaus to block unauthorized credit/loan applications: Equifax (equifax.com/freeze), Experian (experian.com/freeze), TransUnion (transunion.com/freeze), Innovis (innovis.com/freeze). Also freeze: ChexSystems (chexsystems.com, protects bank accounts), LexisNexis Risk Solutions (optout.lexisnexis.com, used in background checks and insurance).'"
-    ],
-    "identity_fraud_prevention": [
-      "Include this always if identity data (name, address, SSN signals, or financial breach) was found:",
-      "'Get an IRS Identity Protection PIN at irs.gov/identity-theft-fraud-scams/get-an-identity-protection-pin — this is a 6-digit PIN required on your federal tax return; prevents fraudulent tax filings in your name. Free, annual renewal.'",
-      "'Lock your SSN in E-Verify at myeverify.uscis.gov — prevents someone from using your SSN to pass employment eligibility checks. Free.'",
-      "'Enroll in USPS Informed Delivery at informeddelivery.usps.com — get email previews of incoming mail before it arrives. Prevents attackers from redirecting your mail without your knowledge.'"
-    ],
-    "sim_swap_hardening": [
-      "Include this if a phone number was found or if financial/email accounts are confirmed:",
-      "'Contact your mobile carrier and add a verbal passcode or port-freeze to your account — this prevents SIM-swap attacks where an attacker transfers your number to a new SIM. All major carriers (AT&T, Verizon, T-Mobile) support this.'",
-      "'Remove your phone number from social media account recovery (Facebook, Twitter/X, Google) — replace with an authenticator app. Phone numbers used for 2FA are visible to advertisers on many platforms and are a SIM-swap target.'"
-    ],
-    "account_reviews": ["group all platforms where the person should review privacy settings into ONE item: 'Review privacy/visibility settings on: [list]'. Include: remove phone number from public view, set profile to private, disable 'allow search engines to index profile'."],
-    "gdpr_removals": ["list ONLY services that are headquartered in the EU or UK — these fall under GDPR. Examples: Spotify (Sweden), Zalando (Germany), ASOS (UK). Do NOT include US-based companies here — they belong in ccpa_removals. Format: 'GDPR erasure request to [EU/UK company]' — set how_to_remove to null (the system will supply the real URL)."],
-    "ccpa_removals": ["list US-based companies where the person has an account or their data appears. CCPA (California Consumer Privacy Act) gives all US residents the right to request data deletion. Format: 'CCPA deletion request to [US company]' — set how_to_remove to null (the system will supply the real URL). Include major platforms found: LinkedIn, Betterment, Robinhood, Coinbase, etc."],
-    "broker_optouts": ["Always include: 'Use EasyOptOuts (easyoptouts.com, ~$20/year) to automate removal from Spokeo, Whitepages, BeenVerified, and 100+ brokers — profiles re-populate every 90 days so ongoing subscription is recommended.' Then list specific brokers found that require manual opt-out."],
-    "monitoring": [
-      "'Set up free breach monitoring: sign up at haveibeenpwned.com with your email address(es) to get notified of future breaches immediately.'",
-      "'Set Google Alerts for your full name, phone number, and home address to catch new public appearances: google.com/alerts'",
-      "'Re-run data broker opt-outs every 90 days — profiles re-populate automatically from public records (voter rolls, property records, court filings) even after removal.'",
-      "'Review active OAuth app permissions quarterly: Google (myaccount.google.com/permissions), Facebook, Twitter/X, GitHub.'"
-    ],
-    "no_action_available": ["list findings where nothing can be done — spam blacklists, breach archives, public record databases. Format: '[Name1], [Name2] — public archives, no removal possible.'"]
-  },
+  "top_risks": ["up to 5 risks, each a plain string. Each must name the specific data combination that creates the risk and what attack it enables, using ONLY breaches/platforms from the scan. E.g. 'A parking-app breach exposed your license plate + phone number — enough to locate your home address via DMV lookup services' or 'Three separate usernames (jdoe92, speedofpee, joe_l59) can be cross-referenced to link your anonymous accounts to your real identity.'"],
   "findings_context": [
     {
       "name": "exact platform or breach name",
@@ -99,21 +71,18 @@ why_it_matters rules (CRITICAL):
 - Each why_it_matters must be unique — no two entries may use the same sentence structure.
 - Name the SPECIFIC data types exposed in that breach/platform AND the specific risk they create.
 - Think about combinations: DOB + address = tax fraud risk. License plate + phone = location tracking. Username + real name = identity linkage. Hashed password + email = credential stuffing.
-- Examples of GOOD why_it_matters:
-    "Your license plate and phone number from ParkMobile are enough to run a DMV lookup and find your home address."
-    "The LuminPDF breach exposed your auth token — if still valid, an attacker can access your documents without your password."
-    "Gravatar indexed your username, real name, and email together — this is used by scrapers to link your anonymous handles to your real identity."
-    "The PDL breach has your employer and job title alongside your email — enough for a convincing spear-phishing attack targeting your work account."
+- Examples of GOOD why_it_matters (these use [placeholder] services — write yours about the ACTUAL services in the scan):
+    "Your license plate and phone number from [a parking-payment app] are enough to run a DMV lookup and find your home address."
+    "[A document e-sign service] exposed your auth token — if still valid, an attacker can access your documents without your password."
+    "[An avatar service] indexed your username, real name, and email together — this is used by scrapers to link your anonymous handles to your real identity."
+    "[A data-enrichment broker] has your employer and job title alongside your email — enough for a convincing spear-phishing attack targeting your work account."
+- If INFOSTEALER LOGS are present: treat this as the highest-severity finding. The machine was infected and ALL saved credentials + session cookies were exfiltrated simultaneously — this is not a single-service breach. Lead with it in identity_summary and top_risks.
+- If PASTE SITES show recent credential pastes (within 90 days): flag as "active exposure" — the credentials are currently circulating on paste sites and credential-stuffing lists.
 - Examples of BAD why_it_matters (do not write these):
     "Your email and password were exposed, making identity fraud more viable."
     "This breach exposes personal information that could be used by malicious actors."
 
-- Do NOT write one remediation action per platform — group similar actions.
-- Do NOT suggest "review your X account" as a standalone action — group into account_reviews.
-- credit_freeze: only include if financial data (credit card, bank, SSN signals), DOB, or physical address was found in a breach.
-- identity_fraud_prevention (IRS PIN, SSA lock): only include if DOB + physical address OR financial account breach found — NOT for every report.
-- sim_swap_hardening: only include if a phone number was confirmed found.
-- EasyOptOuts must appear in broker_optouts if any broker exposure was found."""
+Remember: do NOT output a remediation section. The system builds all action items from the scan data."""
 
 CORRELATION_PROMPT = """You are an OSINT analyst reviewing the results of a privacy scan.
 

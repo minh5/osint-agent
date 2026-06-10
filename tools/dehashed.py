@@ -59,6 +59,7 @@ def run(email: str) -> ToolResult:
 
     if config.is_test_mode():
         import json
+
         raw = json.loads(FIXTURE_PATH.read_text())
         return ToolResult(**raw)
 
@@ -107,7 +108,7 @@ def run(email: str) -> ToolResult:
         phones: list[str] = []
         databases: list[str] = []
 
-        def _str(val) -> str:
+        def _str(val: object) -> str:
             """v2 API returns some fields as lists instead of strings."""
             if isinstance(val, list):
                 return ", ".join(str(v) for v in val if v)

@@ -28,7 +28,8 @@ def _build_action_items(policies: list[AiPlatformPolicy]) -> list[str]:
     ):
         if p.risk_level == "high" and not p.opt_out_available:
             items.append(
-                f"CRITICAL: {p.display_name} has no training opt-out — consider deleting account"
+                f"CRITICAL: {p.display_name} has no training opt-out — "
+                "consider deleting account"
             )
         elif p.trains_consumer_by_default and p.opt_out_available:
             items.append(

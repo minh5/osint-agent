@@ -77,7 +77,8 @@ Examples:
   python main.py --email target@example.com --phone +14155550100
   python main.py --name "John Smith" --state CA
   python main.py --name "John Smith" --city "San Francisco" --state CA
-  python main.py --email target@example.com --name "John Smith" --state NY --phone +14155550100
+  python main.py --email target@example.com --name "John Smith" \
+                 --state NY --phone +14155550100
 """,
     )
     p.add_argument(
@@ -125,7 +126,8 @@ def main():
     if args.name and not any([args.city, args.state, args.zip]):
         parser.print_help()
         print(
-            "\nError: --name requires at least one location flag (--city, --state, or --zip)."
+            "\nError: --name requires at least one location flag "
+            "(--city, --state, or --zip)."
         )
         print('  Example: --name "John Smith" --state CA')
         sys.exit(1)

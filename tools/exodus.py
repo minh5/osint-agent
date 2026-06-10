@@ -102,7 +102,8 @@ def run(inp: ExodusInput) -> ToolResult:
     token = config.get("EXODUS_API_TOKEN")
     if not token:
         logger.info(
-            "exodus: no EXODUS_API_TOKEN set — skipping (get a free token at reports.exodus-privacy.eu.org/en/api/)"
+            "exodus: no EXODUS_API_TOKEN set — skipping "
+            "(get a free token at reports.exodus-privacy.eu.org/en/api/)"
         )
         output = ExodusOutput(
             apps_checked=0,

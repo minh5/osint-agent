@@ -12,11 +12,11 @@ class SpiderfootInput(BaseModel):
         # better by Holehe/Blackbird/Maigret. sfp_hunter removed: it makes
         # unauthenticated calls to hunter.io that stall without an API key
         # and contribute to the status="-" queueing delay.
-        "sfp_hibp",      # breach cross-check
+        "sfp_hibp",  # breach cross-check
         "sfp_emailrep",  # email reputation + risk score
         "sfp_gravatar",  # profile photo, display name, linked accounts
-        "sfp_pgp",       # PGP key lookup — confirms real identity
-        "sfp_whois",     # domain registration info for email domain
+        "sfp_pgp",  # PGP key lookup — confirms real identity
+        "sfp_whois",  # domain registration info for email domain
     ]
 
 

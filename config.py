@@ -18,14 +18,14 @@ OPTIONAL_VARS_WITH_DEFAULTS = {
     "TEST_MODE": "false",
     "RESULTS_OUTPUT_PATH": "output/",
     "SHODAN_API_KEY": "",
-    "EXODUS_API_TOKEN": "",          # free token at reports.exodus-privacy.eu.org/en/api/
-    "NUMVERIFY_API_KEY": "",         # free tier: 100 req/month at numverify.com
-    "COURTLISTENER_API_TOKEN": "",   # free token at courtlistener.com (register → profile → API)
-    "OPENCORPORATES_API_KEY": "",    # free tier at opencorporates.com/api_access
-    "DEHASHED_EMAIL": "",            # account email for HTTP Basic auth at dehashed.com
-    "DEHASHED_API_KEY": "",          # API key from dehashed.com profile (~$5/month)
-    "WHOXY_API_KEY": "",             # whoxy.com — reverse WHOIS by email/name/company
-    "SPIDERFOOT_TIMEOUT": "600",     # seconds to wait for SpiderFoot scan (default 600)
+    "EXODUS_API_TOKEN": "",  # free token at reports.exodus-privacy.eu.org/en/api/
+    "NUMVERIFY_API_KEY": "",  # free tier: 100 req/month at numverify.com
+    "COURTLISTENER_API_TOKEN": "",  # free; courtlistener.com -> profile -> API
+    "OPENCORPORATES_API_KEY": "",  # free tier at opencorporates.com/api_access
+    "DEHASHED_EMAIL": "",  # account email for HTTP Basic auth at dehashed.com
+    "DEHASHED_API_KEY": "",  # API key from dehashed.com profile (~$5/month)
+    "WHOXY_API_KEY": "",  # whoxy.com — reverse WHOIS by email/name/company
+    "SPIDERFOOT_TIMEOUT": "600",  # seconds to wait for SpiderFoot scan (default 600)
 }
 
 

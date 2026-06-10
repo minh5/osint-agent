@@ -29,6 +29,8 @@ class PipelineState(BaseModel):
     hibp_result: ToolResult | None = None
     dehashed_result: ToolResult | None = None
     whoxy_result: ToolResult | None = None
+    paste_result: ToolResult | None = None
+    stealer_result: ToolResult | None = None
     broker_result: ToolResult | None = None
     spiderfoot_result: ToolResult | None = None
     holehe_result: ToolResult | None = None

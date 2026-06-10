@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -119,22 +120,44 @@ def _run_apify(inp: BrokerScanInput) -> list[BrokerProfile]:
 
     if not address:
         logger.info(
-            "broker_scan: apify skipped — actor requires an address/state alongside name"
+            "broker_scan: apify skipped — actor requires an "
+            "address/state alongside name"
         )
         return []
 
     run_input["name"] = inp.value
     run_input["address"] = address
+    run_input["maxConcurrency"] = 3
 
-    logger.info("broker_scan: starting apify actor %s", actor_id)
-    client = ApifyClient(token)
-    run = client.actor(actor_id).call(run_input=run_input)
     logger.info(
-        "broker_scan: apify run finished run_id=%s status=%s", run.id, run.status
+        "broker_scan: starting apify actor %s name=%r address=%r",
+        actor_id,
+        inp.value,
+        address,
+    )
+    client = ApifyClient(token)
+    # ApifyClient.call() returns a pydantic Run object (or None), NOT a dict —
+    # access fields as attributes (run.id / run.status / run.default_dataset_id).
+    run = client.actor(actor_id).call(run_input=run_input)
+    if run is None:
+        logger.warning("broker_scan: apify returned no Run object — no results")
+        return []
+    run_id = run.id
+    status = run.status
+    dataset_id = run.default_dataset_id
+    logger.info(
+        "broker_scan: apify run finished run_id=%s status=%s dataset_id=%s",
+        run_id,
+        status,
+        dataset_id,
     )
 
+    if not dataset_id:
+        logger.warning("broker_scan: apify returned no defaultDatasetId — no results")
+        return []
+
     profiles = []
-    for item in client.dataset(run.default_dataset_id).iterate_items():
+    for item in client.dataset(dataset_id).iterate_items():
         profiles.append(
             BrokerProfile(
                 broker_name=item.get("source", "Unknown"),
@@ -170,7 +193,7 @@ def _run_fastpeoplesearch(inp: BrokerScanInput) -> list[BrokerProfile]:
     else:
         url = f"{FPS_BASE}/{name_slug}"
 
-    logger.info("broker_scan: scraping FastPeopleSearch for %s", inp.value)
+    logger.info("broker_scan: scraping FastPeopleSearch url=%s", url)
     try:
         resp = requests.get(
             "https://api.scrapfly.io/scrape",
@@ -184,7 +207,19 @@ def _run_fastpeoplesearch(inp: BrokerScanInput) -> list[BrokerProfile]:
             timeout=60,
         )
         resp.raise_for_status()
-        html = resp.json().get("result", {}).get("content", "")
+        result_obj = resp.json().get("result", {})
+        sc = result_obj.get("status_code")
+        html = result_obj.get("content", "")
+        logger.info(
+            "broker_scan: FastPeopleSearch scrapfly status=%s html_len=%d",
+            sc,
+            len(html),
+        )
+        if sc and sc != 200:
+            logger.warning(
+                "broker_scan: FastPeopleSearch non-200 from target site: %s", sc
+            )
+            return []
     except Exception as exc:
         logger.warning("broker_scan: FastPeopleSearch scrape failed: %s", exc)
         return []
@@ -269,24 +304,24 @@ def _run_truepeoplesearch(inp: BrokerScanInput) -> list[BrokerProfile]:
         location_parts.append(_state_to_abbrev(inp.state).upper())
     location = ", ".join(location_parts) if location_parts else inp.zip_code or ""
 
-    params: dict = {"name": inp.value}
+    qs_params: dict = {"name": inp.value}
     if location:
-        params["citystatezip"] = location
+        qs_params["citystatezip"] = location
+
+    # Embed query params directly in the URL — Scrapfly passes the url verbatim
+    # to the target site; a separate "query_string" param is not supported.
+    target_url = f"{TPS_BASE}?{urllib.parse.urlencode(qs_params)}"
 
     logger.info(
-        "broker_scan: scraping TruePeopleSearch for %s location=%s",
-        inp.value,
-        location or "(none)",
+        "broker_scan: scraping TruePeopleSearch url=%s",
+        target_url,
     )
     try:
         resp = requests.get(
             "https://api.scrapfly.io/scrape",
             params={
                 "key": scrapfly_key,
-                "url": TPS_BASE,
-                "query_string": "&".join(
-                    f"{k}={requests.utils.quote(str(v))}" for k, v in params.items()
-                ),
+                "url": target_url,
                 "render_js": "true",
                 "asp": "true",
                 "country": "us",
@@ -294,15 +329,28 @@ def _run_truepeoplesearch(inp: BrokerScanInput) -> list[BrokerProfile]:
             timeout=60,
         )
         resp.raise_for_status()
-        html = resp.json().get("result", {}).get("content", "")
+        result_obj = resp.json().get("result", {})
+        sc = result_obj.get("status_code")
+        html = result_obj.get("content", "")
+        logger.info(
+            "broker_scan: TruePeopleSearch scrapfly status=%s html_len=%d",
+            sc,
+            len(html),
+        )
+        if sc and sc != 200:
+            logger.warning(
+                "broker_scan: TruePeopleSearch non-200 from target site: %s", sc
+            )
+            return []
     except Exception as exc:
         logger.warning("broker_scan: TruePeopleSearch scrape failed: %s", exc)
         return []
 
-    # TruePeopleSearch result cards: <div class="card-block shadow-form card-block-detail">
+    # TruePeopleSearch result cards: div.card-block.shadow-form.card-block-detail
     profiles: list[BrokerProfile] = []
     cards = re.findall(
-        r'<div[^>]*class="[^"]*card-block[^"]*shadow-form[^"]*"[^>]*>(.*?)</div>\s*</div>\s*</div>',
+        r'<div[^>]*class="[^"]*card-block[^"]*shadow-form[^"]*"[^>]*>'
+        r"(.*?)</div>\s*</div>\s*</div>",
         html,
         re.DOTALL,
     )

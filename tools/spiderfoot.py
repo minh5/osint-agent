@@ -75,7 +75,8 @@ def run(inp: SpiderfootInput) -> ToolResult:
                 # Don't discard 10 minutes of collected data — abort the scan
                 # and fetch whatever SpiderFoot found so far
                 logger.warning(
-                    "spiderfoot: scan %s timed out after %.0fs — aborting and fetching partial results",
+                    "spiderfoot: scan %s timed out after %.0fs — "
+                    "aborting and fetching partial results",
                     scan_id,
                     elapsed,
                 )

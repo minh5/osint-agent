@@ -24,8 +24,8 @@ from pathlib import Path
 import requests
 
 import config
-from models.whoxy import WhoxyDomain, WhoxyOutput
 from models.shared import ToolResult
+from models.whoxy import WhoxyDomain, WhoxyOutput
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,7 @@ def run(email: str) -> ToolResult:
 
     if config.is_test_mode():
         import json
+
         raw = json.loads(FIXTURE_PATH.read_text())
         return ToolResult(**raw)
 
@@ -70,8 +71,8 @@ def run(email: str) -> ToolResult:
                 WHOXY_URL,
                 params={
                     "key": api_key,
-                    "reverse": "whois",   # not "email" — reverse=whois is the operation
-                    "email": email,       # field name is "email", not "value"
+                    "reverse": "whois",  # not "email" — reverse=whois is the operation
+                    "email": email,  # field name is "email", not "value"
                     "page": str(page),
                 },
                 timeout=20,
@@ -99,7 +100,10 @@ def run(email: str) -> ToolResult:
                         create_date=rec.get("create_date") or "",
                         update_date=rec.get("update_date") or "",
                         expiry_date=rec.get("expiry_date") or "",
-                        registrar_name=rec.get("domain_registrar", {}).get("registrar_name") or "",
+                        registrar_name=rec.get("domain_registrar", {}).get(
+                            "registrar_name"
+                        )
+                        or "",
                         registrant_name=contact.get("full_name") or "",
                         registrant_email=contact.get("email_address") or "",
                         registrant_company=contact.get("company_name") or "",
@@ -114,7 +118,6 @@ def run(email: str) -> ToolResult:
             page += 1
 
         # Aggregate signals
-        from datetime import date as date_type
         today = datetime.now(timezone.utc).date().isoformat()
 
         companies: list[str] = []

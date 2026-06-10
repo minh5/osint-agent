@@ -52,14 +52,17 @@ def _search_courtlistener(name: str, state: str | None = None) -> list[CourtCase
     """
     token = config.get("COURTLISTENER_API_TOKEN")
     if not token:
-        logger.info("public_records: COURTLISTENER_API_TOKEN not set — skipping (free token at courtlistener.com)")
+        logger.info(
+            "public_records: COURTLISTENER_API_TOKEN not set — skipping "
+            "(free token at courtlistener.com)"
+        )
         return []
 
     # type=r = RECAP/PACER federal dockets — searches by party name via full-text index.
     # /dockets/ endpoint is for fetching a specific docket by ID, not name search.
     params: dict[str, str] = {
-        "q": f'"{name}"',   # quoted for exact-phrase match
-        "type": "r",        # r = RECAP dockets (federal cases)
+        "q": f'"{name}"',  # quoted for exact-phrase match
+        "type": "r",  # r = RECAP dockets (federal cases)
         "order_by": "score desc",
         "page_size": "10",
     }
@@ -91,11 +94,16 @@ def _search_courtlistener(name: str, state: str | None = None) -> list[CourtCase
         cases.append(
             CourtCase(
                 case_name=item.get("caseName") or item.get("case_name") or "",
-                docket_number=item.get("docketNumber") or item.get("docket_number") or "",
+                docket_number=item.get("docketNumber")
+                or item.get("docket_number")
+                or "",
                 court=court_name,
                 date_filed=item.get("dateFiled") or item.get("date_filed") or "",
-                date_terminated=item.get("dateTerminated") or item.get("date_terminated"),
-                nature_of_suit=item.get("suitNature") or item.get("nature_of_suit") or "",
+                date_terminated=item.get("dateTerminated")
+                or item.get("date_terminated"),
+                nature_of_suit=item.get("suitNature")
+                or item.get("nature_of_suit")
+                or "",
                 cause=item.get("cause") or "",
                 source_url=(
                     f"https://www.courtlistener.com{item['absolute_url']}"
@@ -112,12 +120,15 @@ def _search_courtlistener(name: str, state: str | None = None) -> list[CourtCase
 def _search_opencorporates(name: str) -> list[CorporateRecord]:
     """Search OpenCorporates for officer/director roles under a name.
 
-    Requires OPENCORPORATES_API_KEY (free tier — register at opencorporates.com/api_access).
-    Skips gracefully when key is not set.
+    Requires OPENCORPORATES_API_KEY (free tier — register at
+    opencorporates.com/api_access). Skips gracefully when key is not set.
     """
     api_key = config.get("OPENCORPORATES_API_KEY")
     if not api_key:
-        logger.info("public_records: OPENCORPORATES_API_KEY not set — skipping (free key at opencorporates.com/api_access)")
+        logger.info(
+            "public_records: OPENCORPORATES_API_KEY not set — skipping "
+            "(free key at opencorporates.com/api_access)"
+        )
         return []
 
     try:

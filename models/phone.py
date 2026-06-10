@@ -19,8 +19,8 @@ class PhoneLookupOutput(BaseModel):
     line_type: str = "unknown"  # mobile / landline / voip / prepaid
     country_code: str = ""
     country_name: str = ""
-    location: str = ""   # city or region where the number was registered
-    geocode: str = ""    # human-readable geographic description (from libphonenumber)
+    location: str = ""  # city or region where the number was registered
+    geocode: str = ""  # human-readable geographic description (from libphonenumber)
     timezone: list[str] = []  # IANA timezone(s) for the number's area
     international_format: str = ""
     local_format: str = ""

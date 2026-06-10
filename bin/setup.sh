@@ -46,6 +46,17 @@ else
     ERRORS=$((ERRORS + 1))
 fi
 
+# ── 2b. Pre-commit lint hook ─────────────────────────
+echo ""
+echo "Enabling pre-commit lint hook..."
+if [ -f ".githooks/pre-commit" ]; then
+    chmod +x .githooks/pre-commit
+    git config core.hooksPath .githooks
+    ok "pre-commit hook enabled (runs lint checks on staged files)"
+else
+    warn ".githooks/pre-commit not found — skipping hook setup"
+fi
+
 # ── 3. .env ──────────────────────────────────────────
 echo ""
 echo "Checking .env..."

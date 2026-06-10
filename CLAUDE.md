@@ -279,6 +279,27 @@ Response handling:
 - `JSONDecodeError` and all other exceptions caught — returns error fallback dict
 - Fallback result has `overall_risk_score: 0` and empty sections (pipeline always completes)
 
+**The LLM only produces the narrative**, not the to-do list. The prompt asks for
+`identity_summary`, `what_is_known`, `top_risks`, `findings_context`, and severities —
+**not** `remediation`. `_postprocess_analysis(state, analysis)` then repairs and completes
+the model's output before it reaches the report:
+- `_normalize_what_is_known()` — coerces any object-shaped items the model emits
+  (`{"PlatformName":..}`, `{"BreachName":..}`) into clean strings, drops junk usernames
+  (all-digits/too-short/placeholder), filters `physical_data` to real street addresses
+  (rejects raw GEOINFO fragments with no street number), and strips internal probe URLs
+  (Holehe/Blackbird `api.*`/`email_available` endpoints are not user-facing profiles).
+- `_filter_top_risks()` — drops risks that parrot the prompt's few-shot example breach
+  names (ParkMobile/PDL/etc.) unless that breach is actually present in scan state.
+- `_finalize_remediation()` — **builds the entire remediation section deterministically
+  from scan state** (`_build_deterministic_remediation()`): change-passwords from real
+  breach password classes, 2FA/privacy-review from confirmed active accounts, credit
+  freeze / IRS-PIN / SIM-swap / broker opt-outs gated on the relevant findings, and
+  always-on monitoring. This is why the report is never sparse — the model dropping
+  sections no longer matters. Deterministic sections win; the (normalized) LLM output is
+  only a fallback for sections the rules don't generate. Unit-tested in
+  `tests/test_analysis_postprocess.py` (the TEST_MODE pipeline path returns the fixture
+  and bypasses post-processing, so the helpers are covered directly).
+
 ## Correlation Planner Node
 
 Also uses Ollama (`num_ctx=4096`, `num_predict=512`).
@@ -322,7 +343,7 @@ TEST_MODE=true uv run pytest -x -q
 ```
 
 `TEST_MODE=true` makes all tools return fixtures. Full pipeline must pass in TEST_MODE.
-Currently: **82 tests**.
+Currently: **115 tests**.
 
 Build order (follow strictly for new tools):
 1. Fixture (`tests/fixtures/<tool>_response.json`)
@@ -332,6 +353,28 @@ Build order (follow strictly for new tools):
 5. Wire into `agent/nodes.py`: node function → wave → digest → report row
 6. Integration test (full pipeline in TEST_MODE)
 7. Real endpoints only after everything is green
+
+---
+
+## Linting & pre-commit
+
+```bash
+./bin/lint.sh          # check black, isort, flake8, mypy
+./bin/lint.sh --fix    # auto-fix black + isort, then check
+```
+
+A git pre-commit hook (`.githooks/pre-commit`) runs the same checks on the Python
+files you're committing and blocks the commit on failure. It is scoped to **staged**
+files (so it never blocks on unrelated pre-existing lint debt) and mirrors
+`bin/lint.sh`'s scope: black + isort over all staged `.py`, flake8 + mypy over staged
+source files excluding `tests/`.
+
+- Enable (already done by `bin/setup.sh`): `git config core.hooksPath .githooks`
+- Auto-fix a blocked commit: `./bin/lint.sh --fix`
+- Bypass once (not advised): `git commit --no-verify`
+
+The hook is tracked in-repo under `.githooks/`; `core.hooksPath` is local git config,
+so each clone enables it via `bin/setup.sh` (or the `git config` line above).
 
 ---
 
@@ -435,6 +478,9 @@ osint-agent/
 - **Correlation planner LLM JSON** — llama3.1:8b sometimes outputs trailing commas or surrounding prose. `_parse_json_tolerant()` in `nodes.py` repairs trailing commas and extracts the first `{...}` block before falling back to the raw error.
 - **Hallucinated pivots** — `_is_real_value()` rejects fake phones (sequential digits, all-same digit), private IPs (10.x, 192.168.x), and placeholder names (`unknown`, `<name>`, etc.).
 - **Maigret result field** — stored in `state.sherlock_result` for historical reasons. Do not rename — tests and digest both reference this field.
+- **8B model drops remediation sections** — asked for a 13-section nested JSON in one shot, llama3.1:8b silently omits most of `remediation` (monitoring, broker opt-outs, SIM-swap all went missing), producing a sparse report. Fix: don't ask the model for remediation at all — `_build_deterministic_remediation()` generates it from scan state. The model only writes narrative.
+- **Model returns objects where strings are required** — `what_is_known` / remediation items came back as `{"PlatformName":..}` / `{"action":..,"platforms":[]}` and the report rendered raw dict reprs (and empty `■` bullets for the object shapes `_rem_item` didn't recognise). Fix: `_normalize_what_is_known()` + `_stringify_rem_item()` coerce everything to strings before rendering.
+- **Model parrots prompt examples as findings** — verbatim example breach names (ParkMobile, PDL) in the prompt got emitted as if they were real findings for the target. Fix: example brand names in `prompts.py` are now `[bracketed placeholders]`, and `_filter_top_risks()` drops any risk naming a known example breach that isn't actually in scan state.
 
 ---
 

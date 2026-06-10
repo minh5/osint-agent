@@ -16,10 +16,11 @@ def build_graph():  # type: ignore[return-value]
     builder = StateGraph(PipelineState)
 
     builder.add_node("intake", intake_node)
-    # Wave 1: breach_check, phone_pivot, surface_map, holehe, blackbird,
-    #         maigret, ghunt — all run concurrently (only need classifications)
+    # Wave 1: breach_check, dehashed, whoxy, paste, stealer, phone_pivot,
+    #         surface_map, holehe, blackbird, maigret, ghunt
+    #         — all run concurrently (only need classifications)
     builder.add_node("wave1_scan", wave1_scan_node)
-    # Wave 2: exodus, broker_scan, shodan, public_records, ai_audit
+    # Wave 2: broker_scan, shodan, public_records, ai_audit
     #         — all run concurrently (need Wave 1 results)
     builder.add_node("wave2_scan", wave2_scan_node)
     builder.add_node("correlation_planner", correlation_planner_node)
