@@ -94,13 +94,22 @@ def run(inp: SpiderfootInput) -> ToolResult:
     base = config.get("SPIDERFOOT_HOST")
     start_time = time.time()
 
+    # SpiderFoot auto-detects the target type from the value. Human and company
+    # names are only recognized when wrapped in double quotes — without them
+    # SpiderFoot returns "Unrecognised target type." for a bare name.
+    scantarget = inp.target
+    if inp.target_type in ("human_name", "company_name") and not (
+        scantarget.startswith('"') and scantarget.endswith('"')
+    ):
+        scantarget = f'"{scantarget}"'
+
     try:
         scan_resp = requests.post(
             f"{base}/startscan",
             headers={"Accept": "application/json"},
             data={
                 "scanname": f"osint-{inp.target_type}-{int(start_time)}",
-                "scantarget": inp.target,
+                "scantarget": scantarget,
                 "modulelist": ",".join(inp.modules),
                 "typelist": "",
                 "usecase": "all",
